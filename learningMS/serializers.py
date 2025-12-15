@@ -396,3 +396,14 @@ class DashboardOverviewSerializer(serializers.Serializer):
     total_lessons_completed = serializers.IntegerField()
     total_learning_hours = serializers.FloatField()
     recent_achievements = AchievementSerializer(many=True)
+
+
+class CourseProgressSerializer(serializers.Serializer):
+    """Serializer that matches the progress item returned by the dashboard `progress` endpoint."""
+    course_id = serializers.IntegerField()
+    course_title = serializers.CharField()
+    overall_progress = serializers.IntegerField()
+    lessons_completed = serializers.IntegerField()
+    total_lessons = serializers.IntegerField()
+    started_at = serializers.DateTimeField(allow_null=True)
+    completed_at = serializers.DateTimeField(allow_null=True, required=False)

@@ -23,7 +23,7 @@ from .serializers import (
     EnrollmentListSerializer, EnrollmentDetailSerializer,
     LessonProgressSerializer,
     ReviewListSerializer, ReviewDetailSerializer, ReviewCreateSerializer,
-    AchievementSerializer, DashboardOverviewSerializer
+    AchievementSerializer, CourseProgressSerializer, DashboardOverviewSerializer
 )
 from drf_spectacular.utils import extend_schema
 
@@ -845,6 +845,9 @@ class DashboardViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+    @extend_schema(
+        responses=CourseProgressSerializer(many=True)
+    )
     @action(detail=False, methods=['get'])
     def progress(self, request):
         """Get detailed progress tracking for user."""
