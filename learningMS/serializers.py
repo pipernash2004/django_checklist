@@ -388,3 +388,11 @@ class AchievementSerializer(serializers.ModelSerializer):
             return 'engagement'
         else:
             return 'other'
+
+#  dashboard serialzier
+class DashboardOverviewSerializer(serializers.Serializer):
+    in_progress_count = serializers.IntegerField()
+    completed_count = serializers.IntegerField()
+    total_lessons_completed = serializers.IntegerField()
+    total_learning_hours = serializers.FloatField()
+    recent_achievements = AchievementSerializer(many=True)

@@ -23,8 +23,9 @@ from .serializers import (
     EnrollmentListSerializer, EnrollmentDetailSerializer,
     LessonProgressSerializer,
     ReviewListSerializer, ReviewDetailSerializer, ReviewCreateSerializer,
-    AchievementSerializer
+    AchievementSerializer, DashboardOverviewSerializer
 )
+from drf_spectacular.utils import extend_schema
 
 logger = logging.getLogger(__name__)
 
@@ -787,6 +788,9 @@ class DashboardViewSet(viewsets.ViewSet):
     - progress: Detailed progress tracking
     """
     permission_classes = [permissions.IsAuthenticated]
+    @extend_schema(
+        responses=DashboardOverviewSerializer
+    )
 
     @action(detail=False, methods=['get'])
     def overview(self, request):

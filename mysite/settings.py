@@ -40,9 +40,10 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework.authtoken',
     'authentication.apps.AuthenticationConfig',
-    'checklist',
+    # 'checklist',
     'learningMS',
-    'django_filters'
+    'django_filters',
+     'drf_spectacular',
 ]
 
 MIDDLEWARE = [
@@ -139,7 +140,16 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_SCHEMA_CLASS': ['drf_spectacular.openapi.AutoSchema',]
 }
-
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Project API',
+    'DESCRIPTION': 'Learning Management System API',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SERVERS': [
+        {'url': 'http://localhost:8000', 'description': 'Local dev'},
+    ],
+}
 # Custom User Model
 AUTH_USER_MODEL = 'authentication.CustomUser'
