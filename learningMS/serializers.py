@@ -1,5 +1,9 @@
 from rest_framework import serializers
 from .models import Course, Lesson, Enrollment, LessonProgress, Review, Achievement
+from .services import (
+    CourseService, LessonService, ReviewService, AchievementService,
+    ValidationService
+)
 
 
 # ============================================================
@@ -22,14 +26,11 @@ class CourseListSerializer(serializers.ModelSerializer):
 
     def get_average_rating(self, obj):
         """Calculate average rating from reviews."""
-        reviews = obj.reviews.all()
-        if not reviews.exists():
-            return None
-        return round(sum(r.rating for r in reviews) / len(reviews), 1)
+        return CourseService.calculate_average_rating(obj)
 
     def get_review_count(self, obj):
         """Count total reviews for course."""
-        return obj.reviews.count()
+        return CourseService.get_review_count(obj)
 
 
 class LessonBasicSerializer(serializers.ModelSerializer):
@@ -59,18 +60,15 @@ class CourseDetailSerializer(serializers.ModelSerializer):
 
     def get_average_rating(self, obj):
         """Calculate average rating from reviews."""
-        reviews = obj.reviews.all()
-        if not reviews.exists():
-            return None
-        return round(sum(r.rating for r in reviews) / len(reviews), 1)
+        return CourseService.calculate_average_rating(obj)
 
     def get_review_count(self, obj):
         """Count total reviews for course."""
-        return obj.reviews.count()
+        return CourseService.get_review_count(obj)
 
     def get_enrollment_count(self, obj):
         """Count total enrollments for course."""
-        return obj.enrollments.count()
+        return CourseService.get_enrollment_count(obj)
 
 
 class CourseCreateUpdateSerializer(serializers.ModelSerializer):
@@ -85,25 +83,24 @@ class CourseCreateUpdateSerializer(serializers.ModelSerializer):
 
     def validate_duration(self, value):
         """Validate duration is positive."""
-        if value <= 0:
+        try:
+            return ValidationService.validate_course_duration(value)
+        except ValidationService:
             raise serializers.ValidationError("Duration must be greater than 0.")
-        return value
 
     def validate_skills(self, value):
         """Validate skills is a list."""
-        if not isinstance(value, list):
-            raise serializers.ValidationError("Skills must be a list.")
-        if len(value) > 50:
-            raise serializers.ValidationError("Maximum 50 skills allowed.")
-        return value
+        try:
+            return ValidationService.validate_skills(value)
+        except ValidationService:
+            raise serializers.ValidationError("Skills validation failed.")
 
     def validate_requirements(self, value):
         """Validate requirements is a list."""
-        if not isinstance(value, list):
-            raise serializers.ValidationError("Requirements must be a list.")
-        if len(value) > 50:
-            raise serializers.ValidationError("Maximum 50 requirements allowed.")
-        return value
+        try:
+            return ValidationService.validate_requirements(value)
+        except ValidationService:
+            raise serializers.ValidationError("Requirements validation failed.")
 
     def create(self, validated_data):
         """Create course with current user as instructor."""
@@ -135,14 +132,7 @@ class LessonDetailSerializer(serializers.ModelSerializer):
 
         try:
             crew_member = request.user.crew_member
-            progress = LessonProgress.objects.get(
-                crew_member=crew_member,
-                lesson=obj
-            )
-            return {
-                'completed': True,
-                'completed_at': progress.created_at
-            }
+            return LessonService.get_lesson_completion_status(obj, crew_member)
         except (LessonProgress.DoesNotExist, AttributeError):
             return {
                 'completed': False,
@@ -162,15 +152,17 @@ class LessonCreateUpdateSerializer(serializers.ModelSerializer):
 
     def validate_duration(self, value):
         """Validate duration is positive."""
-        if value <= 0:
+        try:
+            return LessonService.validate_duration(value)
+        except ValidationService:
             raise serializers.ValidationError("Duration must be greater than 0.")
-        return value
 
     def validate_order(self, value):
         """Validate order is positive."""
-        if value <= 0:
+        try:
+            return LessonService.validate_order(value)
+        except ValidationService:
             raise serializers.ValidationError("Order must be greater than 0.")
-        return value
 
 
 # ============================================================
@@ -284,8 +276,8 @@ class ReviewListSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         """Truncate comment for list view."""
         data = super().to_representation(instance)
-        if data.get('comment') and len(data['comment']) > 40:
-            data['comment'] = data['comment'][:40] + '...'
+        if data.get('comment'):
+            data['comment'] = ReviewService.truncate_comment(data['comment'])
         return data
 
 
@@ -326,15 +318,17 @@ class ReviewCreateSerializer(serializers.ModelSerializer):
 
     def validate_rating(self, value):
         """Validate rating is between 1 and 5."""
-        if not 1 <= value <= 5:
+        try:
+            return ReviewService.validate_rating(value)
+        except ValidationService:
             raise serializers.ValidationError("Rating must be between 1 and 5.")
-        return value
 
     def validate_comment(self, value):
         """Validate comment is not empty."""
-        if not value or not value.strip():
+        try:
+            return ReviewService.validate_comment(value)
+        except ValidationService:
             raise serializers.ValidationError("Comment cannot be empty.")
-        return value
 
     def validate(self, data):
         """Check if user already has a review for this course."""
@@ -344,11 +338,7 @@ class ReviewCreateSerializer(serializers.ModelSerializer):
         if request and request.user.is_authenticated:
             try:
                 crew_member = request.user.crew_member
-                existing = Review.objects.filter(
-                    crew_member=crew_member,
-                    course=course
-                ).exists()
-                if existing:
+                if ReviewService.check_existing_review(crew_member, course):
                     raise serializers.ValidationError(
                         "You have already reviewed this course."
                     )
@@ -379,15 +369,7 @@ class AchievementSerializer(serializers.ModelSerializer):
 
     def get_category(self, obj):
         """Derive category from achievement title."""
-        title_lower = obj.title.lower()
-        if 'course' in title_lower:
-            return 'course'
-        elif 'lesson' in title_lower:
-            return 'lesson'
-        elif 'learning' in title_lower or 'streak' in title_lower:
-            return 'engagement'
-        else:
-            return 'other'
+        return AchievementService.derive_category_from_title(obj.title)
 
 #  dashboard serialzier
 class DashboardOverviewSerializer(serializers.Serializer):

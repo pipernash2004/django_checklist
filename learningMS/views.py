@@ -25,6 +25,10 @@ from .serializers import (
     ReviewListSerializer, ReviewDetailSerializer, ReviewCreateSerializer,
     AchievementSerializer, CourseProgressSerializer, DashboardOverviewSerializer
 )
+from .services import (
+    CourseService, LessonService, EnrollmentService, ReviewService,
+    AchievementService, DashboardService, ValidationService
+)
 from drf_spectacular.utils import extend_schema
 
 logger = logging.getLogger(__name__)
@@ -103,12 +107,11 @@ class CourseViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Auto-set instructor to current user."""
         try:
-            serializer.save(
-                instructor=self.request.user,
-                created_by=self.request.user,
-                updated_by=self.request.user
-            )
-            logger.info(f"Course created by user {self.request.user.id}: {serializer.instance.title}")
+            validated_data = serializer.validated_data
+            validated_data['instructor'] = self.request.user
+            validated_data['created_by'] = self.request.user
+            validated_data['updated_by'] = self.request.user
+            CourseService.create_course(self.request.user, validated_data)
         except Exception as e:
             logger.error(f"Error creating course: {str(e)}")
             raise
@@ -116,20 +119,17 @@ class CourseViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         """Set updated_by to current user."""
         try:
-            serializer.save(updated_by=self.request.user)
-            logger.info(f"Course updated by user {self.request.user.id}: {serializer.instance.title}")
+            course = self.get_object()
+            validated_data = serializer.validated_data
+            CourseService.update_course(course, self.request.user, validated_data)
         except Exception as e:
             logger.error(f"Error updating course: {str(e)}")
             raise
 
     def perform_destroy(self, instance):
         """Only admin can delete."""
-        if not self.request.user.is_staff:
-            logger.warning(f"Non-admin user {self.request.user.id} attempted to delete course {instance.id}")
-            raise ValidationError("Only admin can delete courses.")
         try:
-            instance.delete()
-            logger.info(f"Course deleted by user {self.request.user.id}: {instance.title}")
+            CourseService.delete_course(instance, self.request.user)
         except Exception as e:
             logger.error(f"Error deleting course: {str(e)}")
             raise
@@ -162,25 +162,7 @@ class CourseViewSet(viewsets.ModelViewSet):
         """Enroll current user in course."""
         try:
             course = self.get_object()
-            
-            try:
-                crew_member = request.user.crew_member
-            except AttributeError:
-                logger.warning(f"User {request.user.id} attempted enrollment without crew profile")
-                return Response(
-                    {'error': 'User must have a crew member profile.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Check if already enrolled
-            enrollment, created = Enrollment.objects.get_or_create(
-                crew_member=crew_member,
-                course=course,
-                defaults={
-                    'created_by': request.user,
-                    'updated_by': request.user
-                }
-            )
+            enrollment, created = EnrollmentService.enroll_user_in_course(request.user, course)
 
             if not created:
                 logger.info(f"User {request.user.id} already enrolled in course {course.id}")
@@ -193,6 +175,11 @@ class CourseViewSet(viewsets.ModelViewSet):
             serializer = EnrollmentListSerializer(enrollment)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+        except ValidationError as e:
+            return Response(
+                {'error': str(e.detail)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             logger.error(f"Error enrolling user: {str(e)}", exc_info=True)
             return Response(
@@ -205,7 +192,7 @@ class CourseViewSet(viewsets.ModelViewSet):
         """Get all lessons for this course."""
         try:
             course = self.get_object()
-            lessons = course.lessons.all().order_by('order')
+            lessons = CourseService.get_course_lessons(course)
             serializer = LessonBasicSerializer(lessons, many=True)
             logger.debug(f"Retrieved {len(lessons)} lessons for course {course.id}")
             return Response(serializer.data)
@@ -221,35 +208,7 @@ class CourseViewSet(viewsets.ModelViewSet):
         """Get course statistics."""
         try:
             course = self.get_object()
-            
-            enrollments = course.enrollments.all()
-            total_enrollments = enrollments.count()
-            completed_enrollments = enrollments.filter(completed_at__isnull=False).count()
-            
-            completion_rate = (
-                (completed_enrollments / total_enrollments * 100)
-                if total_enrollments > 0 else 0
-            )
-
-            reviews = course.reviews.all()
-            average_rating = (
-                reviews.aggregate(Avg('rating'))['rating__avg'] or 0
-            )
-
-            total_lessons = course.lessons.count()
-            total_duration = course.duration
-
-            stats_data = {
-                'total_enrollments': total_enrollments,
-                'completed_enrollments': completed_enrollments,
-                'completion_rate': round(completion_rate, 2),
-                'average_rating': round(average_rating, 1),
-                'review_count': reviews.count(),
-                'total_lessons': total_lessons,
-                'total_duration': total_duration
-            }
-            
-            logger.debug(f"Retrieved stats for course {course.id}")
+            stats_data = CourseService.get_course_stats(course)
             return Response(stats_data)
         except Exception as e:
             logger.error(f"Error getting course stats: {str(e)}", exc_info=True)
@@ -263,7 +222,7 @@ class CourseViewSet(viewsets.ModelViewSet):
         """Get all reviews for this course."""
         try:
             course = self.get_object()
-            reviews = course.reviews.all().order_by('-created_at')
+            reviews = CourseService.get_course_reviews(course)
             serializer = ReviewListSerializer(reviews, many=True)
             logger.debug(f"Retrieved {len(reviews)} reviews for course {course.id}")
             return Response(serializer.data)
@@ -341,11 +300,10 @@ class LessonViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Auto-set timestamps."""
         try:
-            serializer.save(
-                created_by=self.request.user,
-                updated_by=self.request.user
-            )
-            logger.info(f"Lesson created by user {self.request.user.id}: {serializer.instance.title}")
+            validated_data = serializer.validated_data
+            validated_data['created_by'] = self.request.user
+            validated_data['updated_by'] = self.request.user
+            LessonService.create_lesson(self.request.user, validated_data)
         except Exception as e:
             logger.error(f"Error creating lesson: {str(e)}")
             raise
@@ -353,20 +311,17 @@ class LessonViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         """Set updated_by to current user."""
         try:
-            serializer.save(updated_by=self.request.user)
-            logger.info(f"Lesson updated by user {self.request.user.id}: {serializer.instance.title}")
+            lesson = self.get_object()
+            validated_data = serializer.validated_data
+            LessonService.update_lesson(lesson, self.request.user, validated_data)
         except Exception as e:
             logger.error(f"Error updating lesson: {str(e)}")
             raise
 
     def perform_destroy(self, instance):
         """Only admin can delete."""
-        if not self.request.user.is_staff:
-            logger.warning(f"Non-admin user {self.request.user.id} attempted to delete lesson {instance.id}")
-            raise ValidationError("Only admin can delete lessons.")
         try:
-            instance.delete()
-            logger.info(f"Lesson deleted by user {self.request.user.id}: {instance.title}")
+            LessonService.delete_lesson(instance, self.request.user)
         except Exception as e:
             logger.error(f"Error deleting lesson: {str(e)}")
             raise
@@ -398,66 +353,21 @@ class LessonViewSet(viewsets.ModelViewSet):
         """Mark lesson as complete."""
         try:
             lesson = self.get_object()
+            crew_member = ValidationService.check_crew_member_exists(request.user)
+
+            result = LessonService.complete_lesson(lesson, crew_member)
             
-            try:
-                crew_member = request.user.crew_member
-            except AttributeError:
-                logger.warning(f"User {request.user.id} attempted lesson completion without crew profile")
-                return Response(
-                    {'error': 'User must have a crew member profile.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Check if enrolled in course
-            enrollment = Enrollment.objects.filter(
-                crew_member=crew_member,
-                course=lesson.course
-            ).first()
-
-            if not enrollment:
-                logger.warning(f"User {request.user.id} not enrolled in course {lesson.course.id}")
-                return Response(
-                    {'error': 'Must be enrolled in course to complete lessons.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Create or get progress record
-            progress, created = LessonProgress.objects.get_or_create(
-                crew_member=crew_member,
-                lesson=lesson
-            )
-
-            # Update enrollment progress
-            total_lessons = lesson.course.lessons.count()
-            completed_lessons = LessonProgress.objects.filter(
-                crew_member=crew_member,
-                lesson__course=lesson.course
-            ).count()
-
-            if total_lessons > 0:
-                progress_percent = round((completed_lessons / total_lessons) * 100)
-            else:
-                progress_percent = 0
-
-            enrollment.overall_progress = progress_percent
-            
-            if progress_percent == 100:
-                enrollment.completed_at = timezone.now()
-
-            enrollment.save()
-
-            logger.info(f"User {request.user.id} completed lesson {lesson.id}, course progress: {progress_percent}%")
-
             return Response({
                 'status': 'completed',
-                'lesson_progress': LessonProgressSerializer(progress).data,
-                'course_progress': {
-                    'overall_progress': progress_percent,
-                    'lessons_completed': completed_lessons,
-                    'total_lessons': total_lessons
-                }
+                'lesson_progress': LessonProgressSerializer(result['progress']).data,
+                'course_progress': result['stats']
             }, status=status.HTTP_200_OK)
 
+        except ValidationError as e:
+            return Response(
+                {'error': str(e.detail)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             logger.error(f"Error completing lesson: {str(e)}", exc_info=True)
             return Response(
@@ -470,33 +380,17 @@ class LessonViewSet(viewsets.ModelViewSet):
         """Get user's completion status for this lesson."""
         try:
             lesson = self.get_object()
+            crew_member = ValidationService.check_crew_member_exists(request.user)
             
-            try:
-                crew_member = request.user.crew_member
-            except AttributeError:
-                logger.warning(f"User {request.user.id} attempted to check status without crew profile")
-                return Response(
-                    {'error': 'User must have a crew member profile.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            status_data = LessonService.get_lesson_completion_status(lesson, crew_member)
+            logger.debug(f"User {request.user.id} checked status for lesson {lesson.id}")
+            return Response(status_data)
 
-            try:
-                progress = LessonProgress.objects.get(
-                    crew_member=crew_member,
-                    lesson=lesson
-                )
-                logger.debug(f"User {request.user.id} has completed lesson {lesson.id}")
-                return Response({
-                    'completed': True,
-                    'completed_at': progress.created_at
-                })
-            except LessonProgress.DoesNotExist:
-                logger.debug(f"User {request.user.id} has not completed lesson {lesson.id}")
-                return Response({
-                    'completed': False,
-                    'completed_at': None
-                })
-
+        except ValidationError as e:
+            return Response(
+                {'error': str(e.detail)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             logger.error(f"Error getting lesson status: {str(e)}", exc_info=True)
             return Response(
@@ -536,12 +430,10 @@ class EnrollmentViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         """Return only current user's enrollments."""
         try:
-            crew_member = self.request.user.crew_member
+            crew_member = ValidationService.check_crew_member_exists(self.request.user)
             logger.debug(f"Filtering enrollments for user {self.request.user.id}")
-            return Enrollment.objects.filter(
-                crew_member=crew_member
-            ).select_related('course').prefetch_related('course__lessons')
-        except AttributeError:
+            return EnrollmentService.get_user_enrollments(crew_member)
+        except ValidationError:
             logger.warning(f"User {self.request.user.id} has no crew profile")
             return Enrollment.objects.none()
 
@@ -570,10 +462,16 @@ class EnrollmentViewSet(viewsets.ReadOnlyModelViewSet):
     def my_courses(self, request):
         """Get user's active (in-progress) courses."""
         try:
-            enrollments = self.get_queryset().filter(overall_progress__lt=100)
+            crew_member = ValidationService.check_crew_member_exists(request.user)
+            enrollments = EnrollmentService.get_active_enrollments(crew_member)
             serializer = self.get_serializer(enrollments, many=True)
             logger.debug(f"Retrieved {len(enrollments)} active courses for user {request.user.id}")
             return Response(serializer.data)
+        except ValidationError as e:
+            return Response(
+                {'error': str(e.detail)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             logger.error(f"Error getting active courses: {str(e)}", exc_info=True)
             return Response(
@@ -585,10 +483,16 @@ class EnrollmentViewSet(viewsets.ReadOnlyModelViewSet):
     def completed(self, request):
         """Get user's completed courses."""
         try:
-            enrollments = self.get_queryset().filter(overall_progress=100)
+            crew_member = ValidationService.check_crew_member_exists(request.user)
+            enrollments = EnrollmentService.get_completed_enrollments(crew_member)
             serializer = self.get_serializer(enrollments, many=True)
             logger.debug(f"Retrieved {len(enrollments)} completed courses for user {request.user.id}")
             return Response(serializer.data)
+        except ValidationError as e:
+            return Response(
+                {'error': str(e.detail)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             logger.error(f"Error getting completed courses: {str(e)}", exc_info=True)
             return Response(
@@ -663,8 +567,11 @@ class ReviewViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Create review with current user as reviewer."""
         try:
-            serializer.save(crew_member=self.request.user.crew_member)
-            logger.info(f"User {self.request.user.id} created review for course {serializer.instance.course.id}")
+            course = serializer.validated_data.get('course')
+            rating = serializer.validated_data.get('rating')
+            comment = serializer.validated_data.get('comment')
+            review = ReviewService.create_review(self.request.user, course, rating, comment)
+            logger.info(f"User {self.request.user.id} created review for course {course.id}")
         except Exception as e:
             logger.error(f"Error creating review: {str(e)}")
             raise
@@ -673,10 +580,8 @@ class ReviewViewSet(viewsets.ModelViewSet):
         """Only allow updating own review."""
         try:
             review = self.get_object()
-            if review.crew_member.user != self.request.user:
-                logger.warning(f"User {self.request.user.id} attempted to update review by {review.crew_member.user.id}")
-                raise ValidationError("You can only update your own review.")
-            serializer.save()
+            validated_data = serializer.validated_data
+            ReviewService.update_review(review, self.request.user, validated_data)
             logger.info(f"User {self.request.user.id} updated review {review.id}")
         except Exception as e:
             logger.error(f"Error updating review: {str(e)}")
@@ -685,10 +590,7 @@ class ReviewViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         """Only allow deleting own review."""
         try:
-            if instance.crew_member.user != self.request.user:
-                logger.warning(f"User {self.request.user.id} attempted to delete review by {instance.crew_member.user.id}")
-                raise ValidationError("You can only delete your own review.")
-            instance.delete()
+            ReviewService.delete_review(instance, self.request.user)
             logger.info(f"User {self.request.user.id} deleted review {instance.id}")
         except Exception as e:
             logger.error(f"Error deleting review: {str(e)}")
@@ -754,17 +656,15 @@ class AchievementViewSet(viewsets.ReadOnlyModelViewSet):
     def my(self, request):
         """Get current user's achievements."""
         try:
-            crew_member = request.user.crew_member
-            achievements = Achievement.objects.filter(
-                crew_member=crew_member
-            ).order_by('-created_at')
+            crew_member = ValidationService.check_crew_member_exists(request.user)
+            achievements = AchievementService.get_user_achievements(crew_member)
             serializer = self.get_serializer(achievements, many=True)
             logger.debug(f"Retrieved {len(achievements)} achievements for user {request.user.id}")
             return Response(serializer.data)
-        except AttributeError:
+        except ValidationError as e:
             logger.warning(f"User {request.user.id} attempted achievement check without crew profile")
             return Response(
-                {'error': 'User must have a crew member profile.'},
+                {'error': str(e.detail)},
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
@@ -796,48 +696,15 @@ class DashboardViewSet(viewsets.ViewSet):
     def overview(self, request):
         """Get user's learning dashboard overview."""
         try:
-            crew_member = request.user.crew_member
-        except AttributeError:
+            crew_member = ValidationService.check_crew_member_exists(request.user)
+            dashboard_data = DashboardService.get_dashboard_overview(crew_member)
+            return Response(dashboard_data)
+        except ValidationError as e:
             logger.warning(f"User {request.user.id} attempted dashboard access without crew profile")
             return Response(
-                {'error': 'User must have a crew member profile.'},
+                {'error': str(e.detail)},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
-        try:
-            # Get enrollments
-            enrollments = Enrollment.objects.filter(crew_member=crew_member)
-            in_progress = enrollments.filter(overall_progress__lt=100).count()
-            completed = enrollments.filter(overall_progress=100).count()
-
-            # Get achievements
-            achievements = Achievement.objects.filter(crew_member=crew_member)
-            recent_achievements = achievements.order_by('-created_at')[:3]
-
-            # Calculate learning stats
-            total_lessons_completed = LessonProgress.objects.filter(
-                crew_member=crew_member
-            ).count()
-
-            total_learning_minutes = Enrollment.objects.filter(
-                crew_member=crew_member,
-                completed_at__isnull=False
-            ).values_list('course__duration', flat=True).sum() or 0
-
-            dashboard_data = {
-                'in_progress_count': in_progress,
-                'completed_count': completed,
-                'total_lessons_completed': total_lessons_completed,
-                'total_learning_hours': round(total_learning_minutes / 60, 1),
-                'recent_achievements': AchievementSerializer(
-                    recent_achievements,
-                    many=True
-                ).data
-            }
-
-            logger.debug(f"Retrieved dashboard overview for user {request.user.id}")
-            return Response(dashboard_data)
-
         except Exception as e:
             logger.error(f"Error getting dashboard overview: {str(e)}", exc_info=True)
             return Response(
@@ -852,40 +719,16 @@ class DashboardViewSet(viewsets.ViewSet):
     def progress(self, request):
         """Get detailed progress tracking for user."""
         try:
-            crew_member = request.user.crew_member
-        except AttributeError:
-            logger.warning(f"User {request.user.id} attempted progress check without crew profile")
-            return Response(
-                {'error': 'User must have a crew member profile.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-            enrollments = Enrollment.objects.filter(
-                crew_member=crew_member
-            ).select_related('course').prefetch_related('course__lessons')
-
-            progress_data = []
-            for enrollment in enrollments:
-                total_lessons = enrollment.course.lessons.count()
-                completed_lessons = LessonProgress.objects.filter(
-                    crew_member=crew_member,
-                    lesson__course=enrollment.course
-                ).count()
-
-                progress_data.append({
-                    'course_id': enrollment.course.id,
-                    'course_title': enrollment.course.title,
-                    'overall_progress': enrollment.overall_progress,
-                    'lessons_completed': completed_lessons,
-                    'total_lessons': total_lessons,
-                    'started_at': enrollment.started_at,
-                    'completed_at': enrollment.completed_at
-                })
-
+            crew_member = ValidationService.check_crew_member_exists(request.user)
+            progress_data = DashboardService.get_detailed_progress(crew_member)
             logger.debug(f"Retrieved progress details for user {request.user.id}")
             return Response(progress_data)
-
+        except ValidationError as e:
+            logger.warning(f"User {request.user.id} attempted progress check without crew profile")
+            return Response(
+                {'error': str(e.detail)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             logger.error(f"Error getting progress details: {str(e)}", exc_info=True)
             return Response(
