@@ -28,7 +28,7 @@ urlpatterns = [
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema')),
 
     path('api/auth/', include('authentication.urls')),
-    path('api/checklist/', include('checklist.urls')),
+    # path('api/checklist/', include('checklist.urls')),
     path('api/lms/', include('learningMS.urls')),
    
 ]
