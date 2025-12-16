@@ -3,6 +3,53 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 
+
+class Role(models.Model):
+    name = models.CharField(
+        max_length=255,
+        unique=True,
+        verbose_name=_("Role Name")
+    )
+    description = models.TextField(
+        blank=True,
+        verbose_name=_("Description")
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name=_("Created At"))
+    updated_at = models.DateTimeField(auto_now=True, verbose_name=_("Updated At"))
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='role_create_by',
+        verbose_name=_("Created By")
+    )
+    last_updated_by = models.ForeignKey(
+       settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='role_last_updated_by',
+        verbose_name=_("Created By")
+    )
+
+
+    def save(self, *args, **kwargs):
+        """
+        Override the save method to ensure the name field is always in uppercase.
+        """
+        self.name = self.name.upper()
+        super().save(*args, **kwargs)
+        
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        verbose_name = _("Role")
+        verbose_name_plural = _("Roles")
+
+
 class ChecklistType(models.Model):
     name = models.CharField(max_length=255, unique=True)
     description = models.TextField(blank=True, null=True)
@@ -44,7 +91,13 @@ class Checklist(models.Model):
     description = models.TextField(blank=True, null=True)
     checklist_type = models.ForeignKey(ChecklistType, on_delete=models.CASCADE, related_name='checklist_type_checklists', null=True,  # temporarily allow null
     blank=True)
-    roles = models.JSONField(default=list, help_text='Roles associated with this checklist')
+    roles = models.ManyToManyField(
+        Role,
+        related_name='checklists_roles',
+        blank=True,
+        help_text="Roles allowed or responsible for this checklist"
+    )
+    notes = models.TextField(blank=True, null=True)
     phase = models.CharField(
     max_length=20,
     choices=CHECKLIST_CHOICES)
@@ -178,5 +231,3 @@ class ListItem(models.Model):
     class Meta:
         verbose_name = "List Item"
         verbose_name_plural = "List Items"
-
-
