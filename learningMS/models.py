@@ -67,6 +67,7 @@ class Course(UserStampedModel, TimeStampedModel):
 
     skills = models.JSONField(default=list, help_text='Skills taught in this course')
     requirements = models.JSONField(default=list, help_text='Prerequisites for this course')
+    outcomes = models.JSONField(default=list, help_text='Learning outcomes of this course')
 
     level = models.CharField(max_length=20, choices=LEVEL_CHOICES)
     category = models.CharField(max_length=100)
@@ -77,7 +78,7 @@ class Course(UserStampedModel, TimeStampedModel):
         verbose_name = 'Course'
         verbose_name_plural = 'Courses'
         ordering = ['-created_at']
-        unique_together = ['title']
+        
 
     def __str__(self):
         return self.title
