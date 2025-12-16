@@ -25,7 +25,7 @@ from .serializers import (
     ReviewListSerializer, ReviewDetailSerializer, ReviewCreateSerializer,
     AchievementSerializer, CourseProgressSerializer, DashboardOverviewSerializer
 )
-from drf_spectacular.utils import extend_schema, OpenApiResponse
+from drf_spectacular.utils import extend_schema
 
 logger = logging.getLogger(__name__)
 
