@@ -213,6 +213,17 @@ class Review(TimeStampedModel):
     )
 
     comment = models.TextField()
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    status = models.CharField(
+        max_length=10,
+        choices=STATUS_CHOICES,
+        default='pending'
+    )
 
     class Meta:
         verbose_name = 'Review'

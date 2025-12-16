@@ -2,14 +2,14 @@ from django.contrib import admin
 
 # Register your models here.
 from django.contrib import admin
-from .models import ChecklistType, Checklist, ListItem, ChecklistItem
+from .models import ChecklistType, Checklist, ListItem, ChecklistProgress,Sections
  # your custom admin site
 
-class ChecklistItemInline(admin.TabularInline):
-    model = ChecklistItem
-    extra = 1
-    fields = ('list_item',)
-    # No readonly fields needed here, as creation date might not be on ChecklistItem
+# class ChecklistItemInline(admin.TabularInline):
+#     model = ChecklistItem
+#     extra = 1
+#     fields = ('list_item',)
+#     # No readonly fields needed here, as creation date might not be on ChecklistItem
 
 class ChecklistTypeAdmin(admin.ModelAdmin):
     list_display = ('name',)
@@ -22,6 +22,41 @@ class ChecklistTypeAdmin(admin.ModelAdmin):
         }),
     )
 
+
+class SectionsAdmin(admin.ModelAdmin):
+    list_display = ('name',)
+    search_fields = ('name', 'description')
+    ordering = ('name',)
+
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'description')
+        }),
+    )
+
+
+class ChecklistProgressAdmin(admin.ModelAdmin):
+    list_display = ('name',)
+    search_fields = ('name', 'description')
+    ordering = ('name',)
+
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'description')
+        }),
+    )
+
+
+class ChecklistTypeAdmin(admin.ModelAdmin):
+    list_display = ('name',)
+    search_fields = ('name', 'description')
+    ordering = ('name',)
+
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'description')
+        }),
+    )
 class ListItemAdmin(admin.ModelAdmin):
     list_display = ('name', 'type', 'status')
     list_filter = ('type', 'status')
@@ -46,7 +81,7 @@ class ChecklistAdmin(admin.ModelAdmin):
         }),
     )
 
-    inlines = [ChecklistItemInline]
+
 
 class ChecklistItemAdmin(admin.ModelAdmin):
     list_display = ('checklist', 'list_item')
@@ -60,19 +95,9 @@ class ChecklistItemAdmin(admin.ModelAdmin):
         }),
     )
 
-# class CrewMemberChecklistAdmin(admin.ModelAdmin):
-#     list_display = ('crew_member', 'checklist')
-#     list_filter = ('checklist__type',)
-#     search_fields = ('crew_member__user__username', 'checklist__name')  # Assuming CrewMember has a user FK
-#     ordering = ('crew_member', 'checklist')
 
-#     fieldsets = (
-#         (None, {
-#             'fields': ('crew_member', 'checklist')
-#         }),
-#     )
 admin.site.register(ChecklistType, ChecklistTypeAdmin)
 admin.site.register(ListItem, ListItemAdmin)
 admin.site.register(Checklist, ChecklistAdmin)
-admin.site.register(ChecklistItem, ChecklistItemAdmin)
-# admin.site.registe(CrewMemberChecklist, CrewMemberChecklistAdmin)   
+admin.site.register(ChecklistProgress, ChecklistProgressAdmin)   
+admin.site.register(Sections, SectionsAdmin)

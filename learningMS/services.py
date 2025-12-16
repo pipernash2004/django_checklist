@@ -8,8 +8,14 @@ from django.db import transaction
 from django.db.models import Avg
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
+from django.contrib.auth import get_user_model
+from django.db.models.functions import TruncDate
+from itertools import chain
+from operator import attrgetter
 
 from .models import Course, Lesson, Enrollment, LessonProgress, Review, Achievement
+
+User = get_user_model()
 
 logger = logging.getLogger(__name__)
 
@@ -527,3 +533,84 @@ class ValidationService:
     def check_lesson_instructor_permission(user, lesson):
         """Check if user is instructor/admin of lesson's course."""
         return user == lesson.course.instructor or user.is_staff
+
+
+
+# ============================================================
+# ADMIN DASHBOARD SERVICES
+# ============================================================
+
+class DashboardStatsService:
+
+    @staticmethod
+    def total_students():
+        """
+        Students are users who have at least one enrollment.
+        """
+        return User.objects.filter(
+            course_enrollments__isnull=False
+        ).distinct().count()
+
+    @staticmethod
+    def total_courses():
+        return Course.objects.count()
+
+    @staticmethod
+    def pending_reviews():
+        """
+        Reviews awaiting moderation.
+        """
+        return Review.objects.filter(status='pending').count()
+
+    @classmethod
+    def get_stats(cls):
+        """
+        Aggregated stats endpoint
+        """
+        return {
+            "total_students": cls.total_students(),
+            "total_courses": cls.total_courses(),
+            "pending_reviews": cls.pending_reviews(),
+        }
+class DashboardActivityService:
+
+    @staticmethod
+    def get_latest(limit=10):
+        enrollments = (
+            Enrollment.objects
+            .select_related('crew_member', 'course')
+            .order_by('-created_at')[:limit]
+        )
+
+        lesson_progress = (
+            LessonProgress.objects
+            .select_related('crew_member', 'lesson')
+            .order_by('-created_at')[:limit]
+        )
+
+        reviews = (
+            Review.objects
+            .select_related('crew_member', 'course')
+            .order_by('-created_at')[:limit]
+        )
+
+        activities = sorted(
+            chain(enrollments, lesson_progress, reviews),
+            key=attrgetter('created_at'),
+            reverse=True
+        )
+
+        return activities[:limit]
+
+
+class DashboardTrendService:
+
+    @staticmethod
+    def enrollment_trend():
+        return (
+            Enrollment.objects
+            .annotate(date=TruncDate('created_at'))
+            .values('date')
+            .annotate(total=Count('id'))
+            .order_by('date')
+        )
