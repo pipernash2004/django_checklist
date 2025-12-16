@@ -34,10 +34,20 @@ class ChecklistType(models.Model):
 
 
 class Checklist(models.Model):
+    
+    CHECKLIST_CHOICES = [
+        ('pre-stream', 'Pre-Stream'),
+        ('on-stream', 'On-Stream'),
+        ('post-stream', 'Post-Stream'),
+    ]
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     checklist_type = models.ForeignKey(ChecklistType, on_delete=models.CASCADE, related_name='checklist_type_checklists', null=True,  # temporarily allow null
     blank=True)
+    roles = models.JSONField(default=list, help_text='Roles associated with this checklist')
+    phase = models.CharField(
+    max_length=20,
+    choices=CHECKLIST_CHOICES)
     created_at = models.DateTimeField(auto_now_add=True, verbose_name=_("Created At"))
     updated_at = models.DateTimeField(auto_now=True, verbose_name=_("Updated At"))
     created_by = models.ForeignKey(
