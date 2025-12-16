@@ -1,98 +1,618 @@
-# # ...existing code...
-# from rest_framework import serializers
-# from django.conf import settings
-# from .models import ChecklistType, Checklist, ListItem, ChecklistProgress, Sections
+"""
+DRF Serializers for checklist app with full validation and Swagger documentation.
+Handles model conversion, JSON validation, field exposure, and business rules.
+"""
+
+from rest_framework import serializers
+from django.contrib.auth import get_user_model
+from django.utils.translation import gettext_lazy as _
+
+from .models import Role, ChecklistType, Checklist, Sections, ListItem, ChecklistProgress
+from .services import (
+    RoleService, ChecklistTypeService, ChecklistService, 
+    SectionService, ListItemService, ChecklistProgressService
+)
+
+User = get_user_model()
 
 
-# # creatting a base serializer to handle created_by and last_updated_by fields
-# class AuditModelSerializer(serializers.ModelSerializer):
-#     """
-#     Base serializer to expose created_by/last_updated_by as usernames
-#     and automatically set created_by/last_updated_by from request.user
-#     on create/update.
-#     """
-#     created_by = serializers.SerializerMethodField(read_only=True)
-#     last_updated_by = serializers.SerializerMethodField(read_only=True)
+# ============================================================
+# USER SERIALIZERS (for nested use)
+# ============================================================
 
-#     def get_created_by(self, obj):
-#         return obj.created_by.username if getattr(obj, 'created_by', None) else None
-
-#     def get_last_updated_by(self, obj):
-#         return obj.last_updated_by.username if getattr(obj, 'last_updated_by', None) else None
-
-#     def _get_request_user(self):
-#         req = self.context.get('request') if hasattr(self, 'context') else None
-#         return getattr(req, 'user', None)
-
-#     def create(self, validated_data):
-#         user = self._get_request_user()
-#         if user and user.is_authenticated:
-#             # ensure we set the user instance, not username string
-#             validated_data['created_by'] = user
-#         return super().create(validated_data)
-
-#     def update(self, instance, validated_data):
-#         user = self._get_request_user()
-#         if user and user.is_authenticated:
-#             validated_data['last_updated_by'] = user
-#         return super().update(instance, validated_data)
+class UserBasicSerializer(serializers.ModelSerializer):
+    """Basic user information for nested representations."""
+    
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'first_name', 'last_name', 'email']
+        read_only_fields = ['id']
 
 
-# class ChecklistTypeSerializer(AuditModelSerializer):
-#     class Meta:
-#         model = ChecklistType
-#         fields = [
-#             'id', 'name', 'description',
-#             'created_at', 'updated_at',
-#             'created_by', 'last_updated_by'
-#         ]
-#         read_only_fields = ('created_at', 'updated_at', 'created_by', 'last_updated_by')
+# ============================================================
+# ROLE SERIALIZERS
+# ============================================================
+
+class RoleListSerializer(serializers.ModelSerializer):
+    """Serializer for listing roles with essential fields."""
+    created_by = UserBasicSerializer(read_only=True)
+    
+    class Meta:
+        model = Role
+        fields = [
+            'id', 'name', 'description', 'created_at', 
+            'updated_at', 'created_by'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
 
 
-# class ListItemSerializer(AuditModelSerializer):
-#     type_name = serializers.CharField(source="type.name", read_only=True)
-
-#     class Meta:
-#         model = ListItem
-#         fields = [
-#             'id', 'name', 'description',
-#             'type', 'type_name',
-#             'status',
-#             'created_at', 'updated_at',
-#             'created_by', 'last_updated_by'
-#         ]
-#         read_only_fields = ('created_at', 'updated_at', 'created_by', 'last_updated_by')
-
-
-# class ChecklistItemSerializer(AuditModelSerializer):
-#     list_item_detail = ListItemSerializer(source="list_item", read_only=True)
-
-#     class Meta:
-#         model = ChecklistItem
-#         fields = [
-#             'id', 'checklist', 'list_item',
-#             'list_item_detail',
-#             'created_at', 'updated_at',
-#             'created_by', 'last_updated_by'
-#         ]
-#         read_only_fields = ('created_at', 'updated_at', 'created_by', 'last_updated_by')
+class RoleDetailSerializer(serializers.ModelSerializer):
+    """Serializer for detailed role information."""
+    created_by = UserBasicSerializer(read_only=True)
+    last_updated_by = UserBasicSerializer(read_only=True)
+    checklist_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Role
+        fields = [
+            'id', 'name', 'description', 'checklist_count',
+            'created_at', 'updated_at', 'created_by', 'last_updated_by'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
+    
+    def get_checklist_count(self, obj):
+        """Get count of checklists using this role."""
+        return obj.checklists_roles.count()
 
 
-# class ChecklistSerializer(AuditModelSerializer):
-#     type_name = serializers.CharField(source="type.name", read_only=True)
-#     items = ChecklistItemSerializer(
-#         source='checklistitem_set', many=True, read_only=True
-#     )
+class RoleCreateUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for creating and updating roles."""
+    
+    class Meta:
+        model = Role
+        fields = ['name', 'description']
+    
+    def validate_name(self, value):
+        """Validate role name is not empty and is unique."""
+        if not value or not value.strip():
+            raise serializers.ValidationError(
+                _("Role name cannot be empty.")
+            )
+        
+        # Check uniqueness (case-insensitive)
+        queryset = Role.objects.filter(name__iexact=value.strip().upper())
+        
+        # Exclude current instance on update
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        
+        if queryset.exists():
+            raise serializers.ValidationError(
+                _("A role with this name already exists.")
+            )
+        
+        return value.strip().upper()
+    
+    def validate_description(self, value):
+        """Validate description field."""
+        if value and len(value.strip()) > 2000:
+            raise serializers.ValidationError(
+                _("Description cannot exceed 2000 characters.")
+            )
+        return value or ""
 
-#     class Meta:
-#         model = Checklist
-#         fields = [
-#             'id', 'name', 'description',
-#             'type', 'type_name',
-#             'items',
-#             'created_at', 'updated_at',
-#             'created_by', 'last_updated_by'
-#         ]
-#         read_only_fields = ('created_at', 'updated_at', 'created_by', 'last_updated_by')
 
-# # ...existing code...
+# ============================================================
+# CHECKLIST TYPE SERIALIZERS
+# ============================================================
+
+class ChecklistTypeListSerializer(serializers.ModelSerializer):
+    """Serializer for listing checklist types."""
+    created_by = UserBasicSerializer(read_only=True)
+    checklist_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ChecklistType
+        fields = [
+            'id', 'name', 'description', 'checklist_count',
+            'created_at', 'updated_at', 'created_by'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
+    
+    def get_checklist_count(self, obj):
+        """Get count of checklists of this type."""
+        return obj.checklist_type_checklists.count()
+
+
+class ChecklistTypeDetailSerializer(serializers.ModelSerializer):
+    """Serializer for detailed checklist type information."""
+    created_by = UserBasicSerializer(read_only=True)
+    last_updated_by = UserBasicSerializer(read_only=True)
+    checklist_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ChecklistType
+        fields = [
+            'id', 'name', 'description', 'checklist_count',
+            'created_at', 'updated_at', 'created_by', 'last_updated_by'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
+    
+    def get_checklist_count(self, obj):
+        """Get count of checklists of this type."""
+        return obj.checklist_type_checklists.count()
+
+
+class ChecklistTypeCreateUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for creating and updating checklist types."""
+    
+    class Meta:
+        model = ChecklistType
+        fields = ['name', 'description']
+    
+    def validate_name(self, value):
+        """Validate checklist type name."""
+        if not value or not value.strip():
+            raise serializers.ValidationError(
+                _("Checklist type name cannot be empty.")
+            )
+        
+        queryset = ChecklistType.objects.filter(name__iexact=value.strip())
+        
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        
+        if queryset.exists():
+            raise serializers.ValidationError(
+                _("A checklist type with this name already exists.")
+            )
+        
+        return value.strip()
+    
+    def validate_description(self, value):
+        """Validate description field."""
+        if value and len(value.strip()) > 2000:
+            raise serializers.ValidationError(
+                _("Description cannot exceed 2000 characters.")
+            )
+        return value or ""
+
+
+# ============================================================
+# SECTION SERIALIZERS
+# ============================================================
+
+class SectionBasicSerializer(serializers.ModelSerializer):
+    """Serializer for basic section information."""
+    
+    class Meta:
+        model = Sections
+        fields = ['id', 'name', 'description', 'order', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class SectionDetailSerializer(serializers.ModelSerializer):
+    """Serializer for detailed section information."""
+    created_by = UserBasicSerializer(read_only=True)
+    last_updated_by = UserBasicSerializer(read_only=True)
+    list_items_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Sections
+        fields = [
+            'id', 'name', 'description', 'order', 'list_items_count',
+            'created_at', 'updated_at', 'created_by', 'last_updated_by'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
+    
+    def get_list_items_count(self, obj):
+        """Get count of list items in this section."""
+        return obj.listitem_set.count()
+
+
+class SectionCreateUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for creating and updating sections."""
+    checklist_id = serializers.IntegerField(write_only=True)
+    checklist_type_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    
+    class Meta:
+        model = Sections
+        fields = ['name', 'description', 'order', 'checklist_id', 'checklist_type_id']
+    
+    def validate_name(self, value):
+        """Validate section name."""
+        if not value or not value.strip():
+            raise serializers.ValidationError(
+                _("Section name cannot be empty.")
+            )
+        
+        if len(value.strip()) > 255:
+            raise serializers.ValidationError(
+                _("Section name cannot exceed 255 characters.")
+            )
+        
+        return value.strip()
+    
+    def validate_order(self, value):
+        """Validate order field."""
+        if value < 0:
+            raise serializers.ValidationError(
+                _("Order must be a non-negative number.")
+            )
+        return value
+    
+    def validate_description(self, value):
+        """Validate description field."""
+        if value and len(value.strip()) > 2000:
+            raise serializers.ValidationError(
+                _("Description cannot exceed 2000 characters.")
+            )
+        return value or ""
+    
+    def validate(self, data):
+        """Validate checklist existence and uniqueness."""
+        checklist_id = data.get('checklist_id')
+        checklist_type_id = data.get('checklist_type_id')
+        name = data.get('name')
+        
+        # Validate checklist exists
+        if not Checklist.objects.filter(id=checklist_id).exists():
+            raise serializers.ValidationError(
+                _("Checklist with this ID does not exist.")
+            )
+        
+        # Validate checklist type exists if provided
+        if checklist_type_id and not ChecklistType.objects.filter(id=checklist_type_id).exists():
+            raise serializers.ValidationError(
+                _("Checklist type with this ID does not exist.")
+            )
+        
+        # Check uniqueness within checklist
+        queryset = Sections.objects.filter(
+            checklist_id=checklist_id,
+            name__iexact=name
+        )
+        
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        
+        if queryset.exists():
+            raise serializers.ValidationError(
+                _("A section with this name already exists in this checklist.")
+            )
+        
+        return data
+
+
+# ============================================================
+# LIST ITEM SERIALIZERS
+# ============================================================
+
+class ListItemBasicSerializer(serializers.ModelSerializer):
+    """Serializer for basic list item information."""
+    
+    class Meta:
+        model = ListItem
+        fields = ['id', 'name', 'description', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class ListItemDetailSerializer(serializers.ModelSerializer):
+    """Serializer for detailed list item information."""
+    created_by = UserBasicSerializer(read_only=True)
+    last_updated_by = UserBasicSerializer(read_only=True)
+    section_name = serializers.CharField(source='section.name', read_only=True)
+    progress_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ListItem
+        fields = [
+            'id', 'name', 'description', 'section_name', 'progress_count',
+            'created_at', 'updated_at', 'created_by', 'last_updated_by'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
+    
+    def get_progress_count(self, obj):
+        """Get count of progress records for this item."""
+        return obj.checklist_progress_items.count()
+
+
+class ListItemCreateUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for creating and updating list items."""
+    section_id = serializers.IntegerField(write_only=True)
+    
+    class Meta:
+        model = ListItem
+        fields = ['name', 'description', 'section_id']
+    
+    def validate_name(self, value):
+        """Validate list item name."""
+        if not value or not value.strip():
+            raise serializers.ValidationError(
+                _("List item name cannot be empty.")
+            )
+        
+        if len(value.strip()) > 255:
+            raise serializers.ValidationError(
+                _("List item name cannot exceed 255 characters.")
+            )
+        
+        return value.strip()
+    
+    def validate_description(self, value):
+        """Validate description field."""
+        if value and len(value.strip()) > 2000:
+            raise serializers.ValidationError(
+                _("Description cannot exceed 2000 characters.")
+            )
+        return value or ""
+    
+    def validate_section_id(self, value):
+        """Validate section exists."""
+        if not Sections.objects.filter(id=value).exists():
+            raise serializers.ValidationError(
+                _("Section with this ID does not exist.")
+            )
+        return value
+
+
+# ============================================================
+# CHECKLIST SERIALIZERS
+# ============================================================
+
+class ChecklistListSerializer(serializers.ModelSerializer):
+    """Serializer for listing checklists."""
+    checklist_type = serializers.StringRelatedField()
+    created_by = UserBasicSerializer(read_only=True)
+    sections_count = serializers.SerializerMethodField()
+    roles_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Checklist
+        fields = [
+            'id', 'name', 'description', 'phase', 'checklist_type',
+            'sections_count', 'roles_count', 'created_at', 'updated_at', 'created_by'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
+    
+    def get_sections_count(self, obj):
+        """Get count of sections in this checklist."""
+        return obj.sections.count()
+    
+    def get_roles_count(self, obj):
+        """Get count of roles assigned to this checklist."""
+        return obj.roles.count()
+
+
+class ChecklistDetailSerializer(serializers.ModelSerializer):
+    """Serializer for detailed checklist information."""
+    checklist_type = ChecklistTypeListSerializer(read_only=True)
+    created_by = UserBasicSerializer(read_only=True)
+    last_updated_by = UserBasicSerializer(read_only=True)
+    sections = SectionBasicSerializer(many=True, read_only=True)
+    roles = RoleListSerializer(many=True, read_only=True)
+    sections_count = serializers.SerializerMethodField()
+    items_count = serializers.SerializerMethodField()
+    progress_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Checklist
+        fields = [
+            'id', 'name', 'description', 'phase', 'notes',
+            'checklist_type', 'sections', 'roles',
+            'sections_count', 'items_count', 'progress_count',
+            'created_at', 'updated_at', 'created_by', 'last_updated_by'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
+    
+    def get_sections_count(self, obj):
+        """Get count of sections."""
+        return obj.sections.count()
+    
+    def get_items_count(self, obj):
+        """Get total count of list items."""
+        return ListItem.objects.filter(section__checklist=obj).count()
+    
+    def get_progress_count(self, obj):
+        """Get count of progress records."""
+        return obj.checklist_progress.count()
+
+
+class ChecklistCreateUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for creating and updating checklists."""
+    checklist_type_id = serializers.IntegerField(required=False, allow_null=True)
+    role_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Role.objects.all(),
+        many=True,
+        write_only=True,
+        required=False
+    )
+    
+    class Meta:
+        model = Checklist
+        fields = [
+            'name', 'description', 'phase', 'notes',
+            'checklist_type_id', 'role_ids'
+        ]
+    
+    def validate_name(self, value):
+        """Validate checklist name."""
+        if not value or not value.strip():
+            raise serializers.ValidationError(
+                _("Checklist name cannot be empty.")
+            )
+        
+        if len(value.strip()) > 255:
+            raise serializers.ValidationError(
+                _("Checklist name cannot exceed 255 characters.")
+            )
+        
+        return value.strip()
+    
+    def validate_phase(self, value):
+        """Validate phase choice."""
+        valid_phases = ['pre-stream', 'on-stream', 'post-stream']
+        if value not in valid_phases:
+            raise serializers.ValidationError(
+                _("Invalid phase. Must be one of: pre-stream, on-stream, post-stream.")
+            )
+        return value
+    
+    def validate_description(self, value):
+        """Validate description field."""
+        if value and len(value.strip()) > 2000:
+            raise serializers.ValidationError(
+                _("Description cannot exceed 2000 characters.")
+            )
+        return value or ""
+    
+    def validate_notes(self, value):
+        """Validate notes field."""
+        if value and len(value.strip()) > 2000:
+            raise serializers.ValidationError(
+                _("Notes cannot exceed 2000 characters.")
+            )
+        return value or ""
+    
+    def validate(self, data):
+        """Validate checklist type existence and uniqueness."""
+        checklist_type_id = data.get('checklist_type_id')
+        name = data.get('name')
+        
+        if checklist_type_id and not ChecklistType.objects.filter(id=checklist_type_id).exists():
+            raise serializers.ValidationError({
+                'checklist_type_id': _("Checklist type with this ID does not exist.")
+            })
+        
+        # Check uniqueness with checklist type
+        if name and checklist_type_id:
+            queryset = Checklist.objects.filter(
+                name__iexact=name,
+                checklist_type_id=checklist_type_id
+            )
+            
+            if self.instance:
+                queryset = queryset.exclude(pk=self.instance.pk)
+            
+            if queryset.exists():
+                raise serializers.ValidationError(
+                    _("A checklist with this name already exists in this checklist type.")
+                )
+        
+        return data
+
+
+# ============================================================
+# CHECKLIST PROGRESS SERIALIZERS
+# ============================================================
+
+class ChecklistProgressListSerializer(serializers.ModelSerializer):
+    """Serializer for listing checklist progress records."""
+    user = UserBasicSerializer(read_only=True)
+    checklist = serializers.StringRelatedField(read_only=True)
+    list_item = serializers.StringRelatedField(source='items', read_only=True)
+    
+    class Meta:
+        model = ChecklistProgress
+        fields = [
+            'id', 'checklist', 'list_item', 'status',
+            'user', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'user']
+
+
+class ChecklistProgressDetailSerializer(serializers.ModelSerializer):
+    """Serializer for detailed checklist progress information."""
+    user = UserBasicSerializer(read_only=True)
+    checklist = ChecklistListSerializer(read_only=True)
+    list_item = ListItemDetailSerializer(source='items', read_only=True)
+    
+    class Meta:
+        model = ChecklistProgress
+        fields = [
+            'id', 'checklist', 'list_item', 'status',
+            'user', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'user']
+
+
+class ChecklistProgressCreateUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for creating and updating checklist progress."""
+    checklist_id = serializers.IntegerField(write_only=True)
+    list_item_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    
+    class Meta:
+        model = ChecklistProgress
+        fields = ['checklist_id', 'list_item_id', 'status']
+    
+    def validate_checklist_id(self, value):
+        """Validate checklist exists."""
+        if not Checklist.objects.filter(id=value).exists():
+            raise serializers.ValidationError(
+                _("Checklist with this ID does not exist.")
+            )
+        return value
+    
+    def validate_list_item_id(self, value):
+        """Validate list item exists if provided."""
+        if value is not None and not ListItem.objects.filter(id=value).exists():
+            raise serializers.ValidationError(
+                _("List item with this ID does not exist.")
+            )
+        return value
+    
+    def validate_status(self, value):
+        """Validate status choice."""
+        valid_statuses = ['pending', 'in_progress', 'completed', 'blocked']
+        if value not in valid_statuses:
+            raise serializers.ValidationError(
+                _("Invalid status. Must be one of: pending, in_progress, completed, blocked.")
+            )
+        return value
+    
+    def validate(self, data):
+        """Validate list item belongs to checklist if provided."""
+        checklist_id = data.get('checklist_id')
+        list_item_id = data.get('list_item_id')
+        
+        if list_item_id:
+            # Verify list item belongs to the checklist
+            list_item = ListItem.objects.filter(id=list_item_id).first()
+            if list_item:
+                checklist = Checklist.objects.filter(id=checklist_id).first()
+                if not checklist.sections.filter(section_listitems__id=list_item_id).exists():
+                    raise serializers.ValidationError(
+                        _("The selected list item does not belong to this checklist.")
+                    )
+        
+        return data
+
+
+class ChecklistProgressStatsSerializer(serializers.Serializer):
+    """Serializer for checklist progress statistics."""
+    total_progress_records = serializers.IntegerField(read_only=True)
+    total_unique_users = serializers.IntegerField(read_only=True)
+    pending = serializers.IntegerField(read_only=True)
+    in_progress = serializers.IntegerField(read_only=True)
+    completed = serializers.IntegerField(read_only=True)
+    blocked = serializers.IntegerField(read_only=True)
+    completion_percentage = serializers.FloatField(read_only=True)
+
+
+class ChecklistStatsSerializer(serializers.Serializer):
+    """Serializer for checklist statistics."""
+    total_sections = serializers.IntegerField(read_only=True)
+    total_items = serializers.IntegerField(read_only=True)
+    total_progress_records = serializers.IntegerField(read_only=True)
+    progress_by_status = serializers.DictField(read_only=True)
+    roles_count = serializers.IntegerField(read_only=True)
+
+
+class UserProgressSummarySerializer(serializers.Serializer):
+    """Serializer for user progress summary."""
+    total_checklists = serializers.IntegerField(read_only=True)
+    total_items = serializers.IntegerField(read_only=True)
+    pending = serializers.IntegerField(read_only=True)
+    in_progress = serializers.IntegerField(read_only=True)
+    completed = serializers.IntegerField(read_only=True)
+    blocked = serializers.IntegerField(read_only=True)

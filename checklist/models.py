@@ -89,7 +89,7 @@ class Checklist(models.Model):
     ]
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
-    checklist_type = models.ForeignKey(ChecklistType, on_delete=models.CASCADE, related_name='checklist_type_checklists', null=True,  # temporarily allow null
+    checklist_type = models.ForeignKey(ChecklistType, on_delete=models.CASCADE, related_name='checklist_type_checklists', null=True,  
     blank=True)
     roles = models.ManyToManyField(
         Role,
