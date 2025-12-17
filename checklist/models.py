@@ -132,7 +132,7 @@ class Checklist(models.Model):
         unique_together = ('name', 'checklist_type')
 
 
-class Sections(models.Model):
+class Sections (models.Model):
 
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
@@ -180,6 +180,7 @@ class ChecklistProgress(models.Model):
     items = models.ForeignKey('ListItem',  related_name='checklist_progress_items', on_delete=models.CASCADE ,null=True,  
     blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    stream = models.CharField(max_length=20,  default='pending')
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -194,7 +195,7 @@ class ChecklistProgress(models.Model):
     class Meta:
         verbose_name = "Checklist Progress"
         verbose_name_plural = "Checklist Progress Records"
-        unique_together = ('items', 'user')
+        unique_together = ('items', 'user','stream')
 
 
 
