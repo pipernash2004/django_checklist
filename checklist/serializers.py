@@ -4,8 +4,10 @@ Handles model conversion, JSON validation, field exposure, and business rules.
 """
 
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext_lazy as _
+from django.db import transaction
 
 from .models import Role, ChecklistType, Checklist, Sections, ListItem, ChecklistProgress
 from .services import (
@@ -616,3 +618,132 @@ class UserProgressSummarySerializer(serializers.Serializer):
     in_progress = serializers.IntegerField(read_only=True)
     completed = serializers.IntegerField(read_only=True)
     blocked = serializers.IntegerField(read_only=True)
+
+
+# ============================================================
+# COMPOSITE / BULK CHECKLIST SERIALIZERS
+# ============================================================
+
+
+class BulkListItemSerializer(serializers.ModelSerializer):
+    """Nested serializer for list items used in composite checklist payload."""
+
+    id = serializers.IntegerField(required=False)
+
+    class Meta:
+        model = ListItem
+        fields = ["id", "name", "description"]
+
+
+class BulkSectionSerializer(serializers.ModelSerializer):
+    """Nested serializer for sections used in composite checklist payload."""
+
+    id = serializers.IntegerField(required=False)
+    items = BulkListItemSerializer(many=True, required=False)
+
+    class Meta:
+        model = Sections
+        fields = ["id", "name", "description", "order", "items"]
+
+
+class ChecklistTypeNestedSerializer(serializers.Serializer):
+    """Accept either {'id': <int>} to link existing type or {'name': <str>} to create a new one."""
+
+    id = serializers.IntegerField(required=False)
+    name = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, data):
+        if not data.get("id") and not data.get("name"):
+            raise serializers.ValidationError(
+                "Either 'id' (to link) or 'name' (to create) must be provided for checklist_type."
+            )
+        return data
+
+
+class ChecklistCompositeSerializer(serializers.ModelSerializer):
+    """Composite serializer that creates/updates a full checklist with nested sections/items and roles.
+
+    Behavior:
+    - `checklist_type`: accepts dict with `id` to link or `name` to create.
+    - `roles`: list of role IDs to assign (must exist).
+    - `sections`: list of sections; each may include `items` list.
+    - `update()` performs a full replace of sections/items (existing sections are removed and recreated).
+    """
+
+    checklist_type = ChecklistTypeNestedSerializer(required=False, allow_null=True)
+    roles = serializers.ListField(child=serializers.IntegerField(), required=False)
+    sections = BulkSectionSerializer(many=True, required=False)
+
+    class Meta:
+        model = Checklist
+        fields = [
+            "id",
+            "name",
+            "description",
+            "phase",
+            "notes",
+            "checklist_type",
+            "roles",
+            "sections",
+        ]
+        read_only_fields = ["id"]
+
+    def validate_phase(self, value):
+        valid_phases = ["pre-stream", "on-stream", "post-stream"]
+        if value not in valid_phases:
+            raise serializers.ValidationError(
+                "Invalid phase. Must be one of: pre-stream, on-stream, post-stream."
+            )
+        return value
+
+    def _get_or_create_checklist_type(self, data, user):
+        if not data:
+            return None
+        ct_id = data.get("id")
+        name = data.get("name")
+        if ct_id:
+            try:
+                return ChecklistType.objects.get(pk=ct_id)
+            except ChecklistType.DoesNotExist:
+                raise serializers.ValidationError({"checklist_type": "ChecklistType with provided id does not exist."})
+        # create by name
+        if name:
+            ct, _ = ChecklistType.objects.get_or_create(name=name.strip(), defaults={
+                "description": "",
+                "created_by": user,
+                "last_updated_by": user,
+            })
+            return ct
+        return None
+
+    def _assign_roles(self, checklist, role_ids):
+        if not role_ids:
+            checklist.roles.clear()
+            return
+        roles_qs = Role.objects.filter(id__in=role_ids)
+        if roles_qs.count() != len(role_ids):
+            missing = set(role_ids) - set(roles_qs.values_list("id", flat=True))
+            raise serializers.ValidationError({"roles": f"Roles not found: {sorted(list(missing))}"})
+        checklist.roles.set(roles_qs)
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        try:
+            return ChecklistService.create_full_checklist(user, validated_data)
+        except ValidationError as e:
+            # Map service validation to serializer validation errors
+            raise serializers.ValidationError(e.detail if hasattr(e, 'detail') else str(e))
+
+    def update(self, instance, validated_data):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        try:
+            return ChecklistService.update_full_checklist(user, instance.id, validated_data)
+        except ValidationError as e:
+            raise serializers.ValidationError(e.detail if hasattr(e, 'detail') else str(e))
+
+    def to_representation(self, instance):
+        # reuse existing detailed serializer for consistent output
+        return ChecklistDetailSerializer(instance, context=self.context).data
+

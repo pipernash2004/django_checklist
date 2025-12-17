@@ -11,6 +11,8 @@ from django.contrib.auth import get_user_model
 from django.db.models import Q, Count, F
 
 from .models import Role, ChecklistType, Checklist, Sections, ListItem, ChecklistProgress
+from django.db import IntegrityError
+from django.db import transaction
 
 User = get_user_model()
 
@@ -250,6 +252,180 @@ class ChecklistService:
 
         logger.info(f"Checklist created by user {user.id}: {checklist.name}")
         return checklist
+
+    @staticmethod
+    @transaction.atomic
+    def create_full_checklist(user, payload: dict):
+        """Create a full checklist with nested checklist_type, roles, sections and list items.
+
+        Payload keys expected:
+        - name, description, phase, notes
+        - checklist_type: {'id': int} or {'name': str}
+        - roles: [int]
+        - sections: [{name, description, order, items: [{name, description}]}]
+        """
+        try:
+            checklist_type_data = payload.get('checklist_type')
+            checklist_type = None
+            if checklist_type_data:
+                ct_id = checklist_type_data.get('id')
+                ct_name = checklist_type_data.get('name')
+                if ct_id:
+                    checklist_type = ChecklistType.objects.filter(id=ct_id).first()
+                    if not checklist_type:
+                        raise ValidationError({'checklist_type': 'ChecklistType with provided id does not exist.'})
+                elif ct_name:
+                    try:
+                        checklist_type, _ = ChecklistType.objects.get_or_create(
+                            name=ct_name.strip(),
+                            defaults={
+                                'description': checklist_type_data.get('description', ''),
+                                'created_by': user,
+                                'last_updated_by': user
+                            }
+                        )
+                    except IntegrityError:
+                        checklist_type = ChecklistType.objects.filter(name=ct_name.strip()).first()
+                        if not checklist_type:
+                            raise ValidationError({'checklist_type': 'Could not create or find ChecklistType.'})
+
+            checklist = Checklist.objects.create(
+                name=payload.get('name'),
+                description=payload.get('description', ''),
+                phase=payload.get('phase'),
+                notes=payload.get('notes', ''),
+                checklist_type=checklist_type,
+                created_by=user,
+                last_updated_by=user,
+            )
+
+            # roles
+            role_ids = payload.get('roles') or []
+            if role_ids:
+                roles_qs = Role.objects.filter(id__in=role_ids)
+                if roles_qs.count() != len(role_ids):
+                    missing = set(role_ids) - set(roles_qs.values_list('id', flat=True))
+                    raise ValidationError({'roles': f'Roles not found: {sorted(list(missing))}'})
+                checklist.roles.set(roles_qs)
+
+            # sections and items
+            sections_data = payload.get('sections') or []
+            for sec in sections_data:
+                items = sec.get('items') or []
+                section = Sections.objects.create(
+                    checklist=checklist,
+                    name=sec.get('name'),
+                    description=sec.get('description', ''),
+                    order=sec.get('order', 0),
+                    created_by=user,
+                    last_updated_by=user,
+                )
+                # bulk create items for this section
+                item_objs = []
+                for it in items:
+                    item_objs.append(ListItem(
+                        section=section,
+                        name=it.get('name'),
+                        description=it.get('description', ''),
+                        created_by=user,
+                        last_updated_by=user,
+                    ))
+                if item_objs:
+                    ListItem.objects.bulk_create(item_objs)
+
+            return checklist
+        except ValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"Error in create_full_checklist: {str(e)}", exc_info=True)
+            raise
+
+    @staticmethod
+    @transaction.atomic
+    def update_full_checklist(user, checklist_id: int, payload: dict):
+        """Update checklist and its nested structures. If `sections` is provided it will fully replace existing sections.
+
+        Similar payload as `create_full_checklist`.
+        """
+        try:
+            checklist = Checklist.objects.get(pk=checklist_id)
+        except Checklist.DoesNotExist:
+            raise ValidationError({'checklist': 'Checklist does not exist.'})
+
+        try:
+            # simple fields
+            for field in ('name', 'description', 'phase', 'notes'):
+                if field in payload:
+                    setattr(checklist, field, payload.get(field))
+
+            # checklist_type
+            ct_data = payload.get('checklist_type')
+            if ct_data is not None:
+                if ct_data.get('id'):
+                    ct = ChecklistType.objects.filter(id=ct_data.get('id')).first()
+                    if not ct:
+                        raise ValidationError({'checklist_type': 'ChecklistType with provided id does not exist.'})
+                    checklist.checklist_type = ct
+                elif ct_data.get('name'):
+                    try:
+                        ct, _ = ChecklistType.objects.get_or_create(
+                            name=ct_data.get('name').strip(),
+                            defaults={'description': ct_data.get('description', ''), 'created_by': user, 'last_updated_by': user}
+                        )
+                        checklist.checklist_type = ct
+                    except IntegrityError:
+                        ct = ChecklistType.objects.filter(name=ct_data.get('name').strip()).first()
+                        if not ct:
+                            raise ValidationError({'checklist_type': 'Could not create or find ChecklistType.'})
+
+            checklist.last_updated_by = user
+            checklist.save()
+
+            # roles
+            if 'roles' in payload:
+                role_ids = payload.get('roles') or []
+                if role_ids:
+                    roles_qs = Role.objects.filter(id__in=role_ids)
+                    if roles_qs.count() != len(role_ids):
+                        missing = set(role_ids) - set(roles_qs.values_list('id', flat=True))
+                        raise ValidationError({'roles': f'Roles not found: {sorted(list(missing))}'})
+                    checklist.roles.set(roles_qs)
+                else:
+                    checklist.roles.clear()
+
+            # sections replacement
+            if 'sections' in payload:
+                # delete existing sections (cascade deletes listitems)
+                checklist.sections.all().delete()
+                sections_data = payload.get('sections') or []
+                for sec in sections_data:
+                    items = sec.get('items') or []
+                    section = Sections.objects.create(
+                        checklist=checklist,
+                        name=sec.get('name'),
+                        description=sec.get('description', ''),
+                        order=sec.get('order', 0),
+                        created_by=user,
+                        last_updated_by=user,
+                    )
+                    item_objs = []
+                    for it in items:
+                        item_objs.append(ListItem(
+                            section=section,
+                            name=it.get('name'),
+                            description=it.get('description', ''),
+                            created_by=user,
+                            last_updated_by=user,
+                        ))
+                    if item_objs:
+                        ListItem.objects.bulk_create(item_objs)
+
+            return checklist
+        except ValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"Error in update_full_checklist: {str(e)}", exc_info=True)
+            raise
 
     @staticmethod
     def update_checklist(user, checklist_id, **kwargs):

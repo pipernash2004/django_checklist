@@ -19,7 +19,7 @@ from .models import Role, ChecklistType, Checklist, Sections, ListItem, Checklis
 from .serializers import (
     RoleListSerializer, RoleDetailSerializer, RoleCreateUpdateSerializer,
     ChecklistTypeListSerializer, ChecklistTypeDetailSerializer, ChecklistTypeCreateUpdateSerializer,
-    ChecklistListSerializer, ChecklistDetailSerializer, ChecklistCreateUpdateSerializer,
+    ChecklistListSerializer, ChecklistDetailSerializer, ChecklistCreateUpdateSerializer, ChecklistCompositeSerializer,
     SectionBasicSerializer, SectionDetailSerializer, SectionCreateUpdateSerializer,
     ListItemBasicSerializer, ListItemDetailSerializer, ListItemCreateUpdateSerializer,
     ChecklistProgressListSerializer, ChecklistProgressDetailSerializer, 
@@ -331,7 +331,8 @@ class ChecklistViewSet(viewsets.ModelViewSet):
         if self.action == 'retrieve':
             return ChecklistDetailSerializer
         elif self.action in ['create', 'update', 'partial_update']:
-            return ChecklistCreateUpdateSerializer
+            # Accept full nested payload for create/update
+            return ChecklistCompositeSerializer
         return ChecklistListSerializer
 
     def get_queryset(self):
@@ -351,20 +352,9 @@ class ChecklistViewSet(viewsets.ModelViewSet):
         """Create checklist."""
         try:
             logger.debug(f"User {self.request.user.id} creating checklist")
-            data = serializer.validated_data
-            roles = data.pop('role_ids', [])
-            checklist_type_id = data.pop('checklist_type_id')
-            
-            checklist = ChecklistService.create_checklist(
-                self.request.user,
-                data['name'],
-                checklist_type_id,
-                data['phase'],
-                roles=roles,
-                description=data.get('description'),
-                notes=data.get('notes')
-            )
-            logger.info(f"Checklist created: {checklist.name} by user {self.request.user.id}")
+            # Composite serializer handles nested creation when used for create
+            checklist = serializer.save()
+            logger.info(f"Checklist created: {checklist.name} (id={checklist.id}) by user {self.request.user.id}")
         except ValidationError as e:
             logger.warning(f"Checklist creation validation error: {str(e)}")
             raise
@@ -376,12 +366,7 @@ class ChecklistViewSet(viewsets.ModelViewSet):
         """Update checklist."""
         try:
             logger.debug(f"User {self.request.user.id} updating checklist")
-            instance = self.get_object()
-            ChecklistService.update_checklist(
-                self.request.user,
-                instance.id,
-                **serializer.validated_data
-            )
+            instance = serializer.save()
             logger.info(f"Checklist {instance.id} updated by user {self.request.user.id}")
         except Exception as e:
             logger.error(f"Error updating checklist: {str(e)}", exc_info=True)
