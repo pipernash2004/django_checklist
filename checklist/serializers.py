@@ -614,8 +614,6 @@ class ChecklistCompositeSerializer(serializers.ModelSerializer):
             )
         return value
 
-    # Composite serializer delegates all business and cross-model operations to the ChecklistService.
-    # It must not perform DB access itself.
 
     def create(self, validated_data):
         user = self.context.get("user")
