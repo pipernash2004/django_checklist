@@ -26,8 +26,8 @@ class UserBasicSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = User
-        fields = ['id', 'username']
-        read_only_fields = ['id', 'username']
+        fields = ['username']
+        read_only_fields = [ 'username']
 
 
 # ============================================================
@@ -105,8 +105,7 @@ class ChecklistTypeListSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at', 'created_by'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
-    
-    # `checklist_count` should be provided/annotated by the view/service layer.
+   
 
 
 class ChecklistTypeDetailSerializer(serializers.ModelSerializer):
@@ -123,7 +122,7 @@ class ChecklistTypeDetailSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
     
-    # `checklist_count` should be provided/annotated by the view/service layer.
+  
 
 
 class ChecklistTypeCreateUpdateSerializer(serializers.ModelSerializer):
@@ -183,10 +182,10 @@ class ListItemNestedSerializer(serializers.ModelSerializer):
     
     def get_progress_count(self, obj):
         """Get progress count from annotated field if available, else query."""
-        # If the queryset was prefetched with annotation, use it
+    
         if hasattr(obj, 'progress_count'):
             return obj.progress_count
-        # Fallback for cases where annotation wasn't applied
+ 
         return obj.checklist_progress_items.count()
 
 
@@ -201,7 +200,8 @@ class SectionWithItemsSerializer(serializers.ModelSerializer):
     """
     created_by = UserBasicSerializer(read_only=True)
     last_updated_by = UserBasicSerializer(read_only=True)
-    # Use the actual reverse relation from ListItem model (listitem_set since no related_name specified)
+
+ 
     items = ListItemNestedSerializer(many=True, read_only=True, source='listitem_set')
     list_items_count = serializers.SerializerMethodField()
 
@@ -215,10 +215,10 @@ class SectionWithItemsSerializer(serializers.ModelSerializer):
     
     def get_list_items_count(self, obj):
         """Get list items count from annotated field if available, else query."""
-        # If the queryset was annotated with list_items_count, use it
+       
         if hasattr(obj, 'list_items_count'):
             return obj.list_items_count
-        # Fallback for cases where annotation wasn't applied
+    
         return obj.listitem_set.count()
 
 
@@ -279,7 +279,7 @@ class SectionCreateUpdateSerializer(serializers.ModelSerializer):
     
     def validate(self, data):
         """Validate checklist existence and uniqueness."""
-        # Existence, uniqueness and cross-model validations are handled in services.
+    
         return data
 
 
@@ -346,7 +346,7 @@ class ListItemCreateUpdateSerializer(serializers.ModelSerializer):
     
     def validate_section_id(self, value):
         """Validate section exists."""
-        # Existence checks moved to service layer. Ensure positive id.
+       
         if value is not None and value <= 0:
             raise serializers.ValidationError(
                 _("Invalid section id.")
@@ -600,7 +600,7 @@ class UserProgressSummarySerializer(serializers.Serializer):
 
 
 # ============================================================
-# COMPOSITE / BULK CHECKLIST SERIALIZERS
+# COMPOSITE  CHECKLIST SERIALIZERS
 # ============================================================
 
 
