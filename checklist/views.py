@@ -38,6 +38,30 @@ logger = logging.getLogger(__name__)
 # PERMISSION CLASSES
 # ============================================================
 
+class IsAuthenticatedAndVerified(permissions.BasePermission):
+    """
+    Allow only authenticated and verified users.
+    """
+    def has_permission(self, request, view):
+        return (
+            request.user 
+            and request.user.is_authenticated 
+            and request.user.is_verified
+        )
+
+
+class HasChecklistRole(permissions.BasePermission):
+    """
+    Allow access only if user has a checklist role assigned.
+    """
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        if request.user.is_staff:
+            return True
+        return request.user.checklist_roles.exists()
+
+
 class IsStaffOrReadOnly(permissions.BasePermission):
     """
     Allow read access to anyone.
@@ -85,6 +109,7 @@ class RoleViewSet(viewsets.ModelViewSet):
     - update/partial_update: Update role (staff only)
     - destroy: Delete role (staff only)
     - checklists: Get checklists using this role
+    - my_roles: Get roles assigned to current user
     """
     queryset = Role.objects.all()
     permission_classes = [permissions.IsAuthenticated, IsStaffOrReadOnly]
@@ -190,6 +215,31 @@ class RoleViewSet(viewsets.ModelViewSet):
             logger.error(f"Error retrieving checklists for role: {str(e)}", exc_info=True)
             return Response(
                 {'detail': 'Failed to retrieve checklists'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @extend_schema(
+        description="Get all roles assigned to the current user",
+        responses={200: RoleListSerializer(many=True)}
+    )
+    @action(
+        detail=False, 
+        methods=['get'], 
+        permission_classes=[permissions.IsAuthenticated],
+        url_path='my-roles'
+    )
+    def my_roles(self, request):
+        """Get all roles assigned to the current user."""
+        try:
+            logger.debug(f"User {request.user.id} retrieving their assigned roles")
+            roles = request.user.checklist_roles.all().order_by('name')
+            serializer = self.get_serializer(roles, many=True)
+            logger.info(f"User {request.user.id} has {len(roles)} checklist roles")
+            return Response(serializer.data)
+        except Exception as e:
+            logger.error(f"Error retrieving user roles: {str(e)}", exc_info=True)
+            return Response(
+                {'detail': 'Failed to retrieve your roles'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -336,17 +386,44 @@ class ChecklistViewSet(viewsets.ModelViewSet):
         return ChecklistListSerializer
 
     def get_queryset(self):
-        """Optimize queryset with prefetching."""
+        """Optimize queryset with prefetching for sections and items in detail view."""
         queryset = super().get_queryset()
         if self.action == 'retrieve':
-            queryset = queryset.prefetch_related(
+            # For detail: prefetch sections with their items and progress counts
+            sections_prefetch = Prefetch(
                 'sections',
+                Sections.objects.prefetch_related(
+                    Prefetch(
+                        'section_listitems',
+                        ListItem.objects.select_related('created_by')
+                    )
+                ).select_related('created_by', 'last_updated_by').annotate(
+                    list_items_count=Count('section_listitems', distinct=True)
+                )
+            )
+            queryset = queryset.prefetch_related(
+                sections_prefetch,
                 'roles',
                 'checklist_progress'
-            ).select_related('checklist_type', 'created_by', 'last_updated_by')
+            ).select_related('checklist_type', 'created_by', 'last_updated_by').annotate(
+                sections_count=Count('sections', distinct=True),
+                items_count=Count('sections__section_listitems', distinct=True),
+                progress_count=Count('checklist_progress', distinct=True),
+                roles_count=Count('roles', distinct=True)
+            )
         elif self.action == 'list':
-            queryset = queryset.select_related('checklist_type', 'created_by')
+            # For list: minimal queries, just counts
+            queryset = queryset.select_related('checklist_type', 'created_by').annotate(
+                sections_count=Count('sections', distinct=True),
+                roles_count=Count('roles', distinct=True)
+            )
         return queryset
+
+    def get_serializer_context(self):
+        """Pass user to serializer for composite create/update operations."""
+        context = super().get_serializer_context()
+        context['user'] = self.request.user
+        return context
 
     def perform_create(self, serializer):
         """Create checklist."""
@@ -381,6 +458,23 @@ class ChecklistViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.error(f"Error deleting checklist: {str(e)}", exc_info=True)
             raise
+
+    def list(self, request, *args, **kwargs):
+        """List all checklists (lightweight, no sections/items)."""
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        """Get checklist details with full section/item hierarchy."""
+        instance = self.get_object()
+        
+        # Annotate list items with counts for nested serializer
+        for section in instance.sections.all():
+            for item in section.section_listitems.all():
+                item.progress_count = Count('checklist_progress_items').filter(
+                    items=item
+                ).count() if hasattr(item, 'checklist_progress_items') else 0
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
 
     @extend_schema(
         description="Get all sections in this checklist",

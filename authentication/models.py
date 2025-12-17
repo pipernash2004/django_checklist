@@ -48,6 +48,15 @@ class CustomUser(AbstractUser):
 
     organization = models.CharField(max_length=100, blank=True, null=True, verbose_name=_("Organization"))
     is_verified = models.BooleanField(default=False, verbose_name=_("Is Verified"))
+    
+    # Link to checklist roles - allows users to be assigned specific roles for checklists
+    checklist_roles = models.ManyToManyField(
+        'checklist.Role',
+        blank=True,
+        related_name='users',
+        verbose_name=_("Checklist Roles"),
+        help_text=_("Roles this user can perform in checklists")
+    )
 
     groups = models.ManyToManyField(
         Group,

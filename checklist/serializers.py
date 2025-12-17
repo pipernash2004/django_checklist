@@ -7,12 +7,11 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext_lazy as _
-from django.db import transaction
 
 from .models import Role, ChecklistType, Checklist, Sections, ListItem, ChecklistProgress
 from .services import (
-    RoleService, ChecklistTypeService, ChecklistService, 
-    SectionService, ListItemService, ChecklistProgressService
+    ChecklistService
+  
 )
 
 User = get_user_model()
@@ -23,12 +22,12 @@ User = get_user_model()
 # ============================================================
 
 class UserBasicSerializer(serializers.ModelSerializer):
-    """Basic user information for nested representations."""
+    """Basic user information for nested representations (id and username only)."""
     
     class Meta:
         model = User
-        fields = ['id', 'username', 'first_name', 'last_name', 'email']
-        read_only_fields = ['id']
+        fields = ['id', 'username']
+        read_only_fields = ['id', 'username']
 
 
 # ============================================================
@@ -52,7 +51,7 @@ class RoleDetailSerializer(serializers.ModelSerializer):
     """Serializer for detailed role information."""
     created_by = UserBasicSerializer(read_only=True)
     last_updated_by = UserBasicSerializer(read_only=True)
-    checklist_count = serializers.SerializerMethodField()
+    checklist_count = serializers.IntegerField(read_only=True)
     
     class Meta:
         model = Role
@@ -62,9 +61,7 @@ class RoleDetailSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
     
-    def get_checklist_count(self, obj):
-        """Get count of checklists using this role."""
-        return obj.checklists_roles.count()
+
 
 
 class RoleCreateUpdateSerializer(serializers.ModelSerializer):
@@ -80,19 +77,7 @@ class RoleCreateUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 _("Role name cannot be empty.")
             )
-        
-        # Check uniqueness (case-insensitive)
-        queryset = Role.objects.filter(name__iexact=value.strip().upper())
-        
-        # Exclude current instance on update
-        if self.instance:
-            queryset = queryset.exclude(pk=self.instance.pk)
-        
-        if queryset.exists():
-            raise serializers.ValidationError(
-                _("A role with this name already exists.")
-            )
-        
+        # Uniqueness checks moved to service layer.
         return value.strip().upper()
     
     def validate_description(self, value):
@@ -111,7 +96,7 @@ class RoleCreateUpdateSerializer(serializers.ModelSerializer):
 class ChecklistTypeListSerializer(serializers.ModelSerializer):
     """Serializer for listing checklist types."""
     created_by = UserBasicSerializer(read_only=True)
-    checklist_count = serializers.SerializerMethodField()
+    checklist_count = serializers.IntegerField(read_only=True)
     
     class Meta:
         model = ChecklistType
@@ -121,16 +106,14 @@ class ChecklistTypeListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
     
-    def get_checklist_count(self, obj):
-        """Get count of checklists of this type."""
-        return obj.checklist_type_checklists.count()
+    # `checklist_count` should be provided/annotated by the view/service layer.
 
 
 class ChecklistTypeDetailSerializer(serializers.ModelSerializer):
     """Serializer for detailed checklist type information."""
     created_by = UserBasicSerializer(read_only=True)
     last_updated_by = UserBasicSerializer(read_only=True)
-    checklist_count = serializers.SerializerMethodField()
+    checklist_count = serializers.IntegerField(read_only=True)
     
     class Meta:
         model = ChecklistType
@@ -140,9 +123,7 @@ class ChecklistTypeDetailSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
     
-    def get_checklist_count(self, obj):
-        """Get count of checklists of this type."""
-        return obj.checklist_type_checklists.count()
+    # `checklist_count` should be provided/annotated by the view/service layer.
 
 
 class ChecklistTypeCreateUpdateSerializer(serializers.ModelSerializer):
@@ -157,16 +138,6 @@ class ChecklistTypeCreateUpdateSerializer(serializers.ModelSerializer):
         if not value or not value.strip():
             raise serializers.ValidationError(
                 _("Checklist type name cannot be empty.")
-            )
-        
-        queryset = ChecklistType.objects.filter(name__iexact=value.strip())
-        
-        if self.instance:
-            queryset = queryset.exclude(pk=self.instance.pk)
-        
-        if queryset.exists():
-            raise serializers.ValidationError(
-                _("A checklist type with this name already exists.")
             )
         
         return value.strip()
@@ -193,11 +164,41 @@ class SectionBasicSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
 
+class ListItemNestedSerializer(serializers.ModelSerializer):
+    """Serializer for list items nested in sections (detail view)."""
+    created_by = UserBasicSerializer(read_only=True)
+    progress_count = serializers.IntegerField(read_only=True)
+    
+    class Meta:
+        model = ListItem
+        fields = [
+            'id', 'name', 'description', 'progress_count',
+            'created_at', 'updated_at', 'created_by'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
+
+
+class SectionWithItemsSerializer(serializers.ModelSerializer):
+    """Serializer for sections with nested items (for detail view)."""
+    created_by = UserBasicSerializer(read_only=True)
+    last_updated_by = UserBasicSerializer(read_only=True)
+    section_listitems = ListItemNestedSerializer(many=True, read_only=True, source='section_listitems.all')
+    list_items_count = serializers.IntegerField(read_only=True)
+    
+    class Meta:
+        model = Sections
+        fields = [
+            'id', 'name', 'description', 'order', 'list_items_count',
+            'section_listitems', 'created_at', 'updated_at', 'created_by', 'last_updated_by'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
+
+
 class SectionDetailSerializer(serializers.ModelSerializer):
     """Serializer for detailed section information."""
     created_by = UserBasicSerializer(read_only=True)
     last_updated_by = UserBasicSerializer(read_only=True)
-    list_items_count = serializers.SerializerMethodField()
+    list_items_count = serializers.IntegerField(read_only=True)
     
     class Meta:
         model = Sections
@@ -206,10 +207,7 @@ class SectionDetailSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at', 'created_by', 'last_updated_by'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
-    
-    def get_list_items_count(self, obj):
-        """Get count of list items in this section."""
-        return obj.listitem_set.count()
+ 
 
 
 class SectionCreateUpdateSerializer(serializers.ModelSerializer):
@@ -253,36 +251,7 @@ class SectionCreateUpdateSerializer(serializers.ModelSerializer):
     
     def validate(self, data):
         """Validate checklist existence and uniqueness."""
-        checklist_id = data.get('checklist_id')
-        checklist_type_id = data.get('checklist_type_id')
-        name = data.get('name')
-        
-        # Validate checklist exists
-        if not Checklist.objects.filter(id=checklist_id).exists():
-            raise serializers.ValidationError(
-                _("Checklist with this ID does not exist.")
-            )
-        
-        # Validate checklist type exists if provided
-        if checklist_type_id and not ChecklistType.objects.filter(id=checklist_type_id).exists():
-            raise serializers.ValidationError(
-                _("Checklist type with this ID does not exist.")
-            )
-        
-        # Check uniqueness within checklist
-        queryset = Sections.objects.filter(
-            checklist_id=checklist_id,
-            name__iexact=name
-        )
-        
-        if self.instance:
-            queryset = queryset.exclude(pk=self.instance.pk)
-        
-        if queryset.exists():
-            raise serializers.ValidationError(
-                _("A section with this name already exists in this checklist.")
-            )
-        
+        # Existence, uniqueness and cross-model validations are handled in services.
         return data
 
 
@@ -304,7 +273,7 @@ class ListItemDetailSerializer(serializers.ModelSerializer):
     created_by = UserBasicSerializer(read_only=True)
     last_updated_by = UserBasicSerializer(read_only=True)
     section_name = serializers.CharField(source='section.name', read_only=True)
-    progress_count = serializers.SerializerMethodField()
+    progress_count = serializers.IntegerField(read_only=True)
     
     class Meta:
         model = ListItem
@@ -314,9 +283,7 @@ class ListItemDetailSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
     
-    def get_progress_count(self, obj):
-        """Get count of progress records for this item."""
-        return obj.checklist_progress_items.count()
+  
 
 
 class ListItemCreateUpdateSerializer(serializers.ModelSerializer):
@@ -351,9 +318,10 @@ class ListItemCreateUpdateSerializer(serializers.ModelSerializer):
     
     def validate_section_id(self, value):
         """Validate section exists."""
-        if not Sections.objects.filter(id=value).exists():
+        # Existence checks moved to service layer. Ensure positive id.
+        if value is not None and value <= 0:
             raise serializers.ValidationError(
-                _("Section with this ID does not exist.")
+                _("Invalid section id.")
             )
         return value
 
@@ -363,11 +331,11 @@ class ListItemCreateUpdateSerializer(serializers.ModelSerializer):
 # ============================================================
 
 class ChecklistListSerializer(serializers.ModelSerializer):
-    """Serializer for listing checklists."""
+    """Serializer for listing checklists (lightweight, no nested sections/items)."""
     checklist_type = serializers.StringRelatedField()
     created_by = UserBasicSerializer(read_only=True)
-    sections_count = serializers.SerializerMethodField()
-    roles_count = serializers.SerializerMethodField()
+    sections_count = serializers.IntegerField(read_only=True)
+    roles_count = serializers.IntegerField(read_only=True)
     
     class Meta:
         model = Checklist
@@ -376,26 +344,19 @@ class ChecklistListSerializer(serializers.ModelSerializer):
             'sections_count', 'roles_count', 'created_at', 'updated_at', 'created_by'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
-    
-    def get_sections_count(self, obj):
-        """Get count of sections in this checklist."""
-        return obj.sections.count()
-    
-    def get_roles_count(self, obj):
-        """Get count of roles assigned to this checklist."""
-        return obj.roles.count()
 
+   
 
 class ChecklistDetailSerializer(serializers.ModelSerializer):
-    """Serializer for detailed checklist information."""
+    """Serializer for detailed checklist information with full section/item hierarchy."""
     checklist_type = ChecklistTypeListSerializer(read_only=True)
     created_by = UserBasicSerializer(read_only=True)
     last_updated_by = UserBasicSerializer(read_only=True)
-    sections = SectionBasicSerializer(many=True, read_only=True)
+    sections = SectionWithItemsSerializer(many=True, read_only=True)
     roles = RoleListSerializer(many=True, read_only=True)
-    sections_count = serializers.SerializerMethodField()
-    items_count = serializers.SerializerMethodField()
-    progress_count = serializers.SerializerMethodField()
+    sections_count = serializers.IntegerField(read_only=True)
+    items_count = serializers.IntegerField(read_only=True)
+    progress_count = serializers.IntegerField(read_only=True)
     
     class Meta:
         model = Checklist
@@ -407,28 +368,19 @@ class ChecklistDetailSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
     
-    def get_sections_count(self, obj):
-        """Get count of sections."""
-        return obj.sections.count()
-    
-    def get_items_count(self, obj):
-        """Get total count of list items."""
-        return ListItem.objects.filter(section__checklist=obj).count()
-    
-    def get_progress_count(self, obj):
-        """Get count of progress records."""
-        return obj.checklist_progress.count()
+
 
 
 class ChecklistCreateUpdateSerializer(serializers.ModelSerializer):
     """Serializer for creating and updating checklists."""
     checklist_type_id = serializers.IntegerField(required=False, allow_null=True)
-    role_ids = serializers.PrimaryKeyRelatedField(
-        queryset=Role.objects.all(),
-        many=True,
+    role_ids = serializers.ListField(
+        child=serializers.IntegerField(),
         write_only=True,
         required=False
     )
+   
+ 
     
     class Meta:
         model = Checklist
@@ -478,29 +430,7 @@ class ChecklistCreateUpdateSerializer(serializers.ModelSerializer):
     
     def validate(self, data):
         """Validate checklist type existence and uniqueness."""
-        checklist_type_id = data.get('checklist_type_id')
-        name = data.get('name')
-        
-        if checklist_type_id and not ChecklistType.objects.filter(id=checklist_type_id).exists():
-            raise serializers.ValidationError({
-                'checklist_type_id': _("Checklist type with this ID does not exist.")
-            })
-        
-        # Check uniqueness with checklist type
-        if name and checklist_type_id:
-            queryset = Checklist.objects.filter(
-                name__iexact=name,
-                checklist_type_id=checklist_type_id
-            )
-            
-            if self.instance:
-                queryset = queryset.exclude(pk=self.instance.pk)
-            
-            if queryset.exists():
-                raise serializers.ValidationError(
-                    _("A checklist with this name already exists in this checklist type.")
-                )
-        
+        # Existence and uniqueness validations moved to service layer.
         return data
 
 
@@ -549,18 +479,16 @@ class ChecklistProgressCreateUpdateSerializer(serializers.ModelSerializer):
     
     def validate_checklist_id(self, value):
         """Validate checklist exists."""
-        if not Checklist.objects.filter(id=value).exists():
-            raise serializers.ValidationError(
-                _("Checklist with this ID does not exist.")
-            )
+        # Existence checks moved to service layer.
+        if value is not None and value <= 0:
+            raise serializers.ValidationError(_("Invalid checklist id."))
         return value
     
     def validate_list_item_id(self, value):
         """Validate list item exists if provided."""
-        if value is not None and not ListItem.objects.filter(id=value).exists():
-            raise serializers.ValidationError(
-                _("List item with this ID does not exist.")
-            )
+        # Existence checks moved to service layer.
+        if value is not None and value <= 0:
+            raise serializers.ValidationError(_("Invalid list item id."))
         return value
     
     def validate_status(self, value):
@@ -576,17 +504,7 @@ class ChecklistProgressCreateUpdateSerializer(serializers.ModelSerializer):
         """Validate list item belongs to checklist if provided."""
         checklist_id = data.get('checklist_id')
         list_item_id = data.get('list_item_id')
-        
-        if list_item_id:
-            # Verify list item belongs to the checklist
-            list_item = ListItem.objects.filter(id=list_item_id).first()
-            if list_item:
-                checklist = Checklist.objects.filter(id=checklist_id).first()
-                if not checklist.sections.filter(section_listitems__id=list_item_id).exists():
-                    raise serializers.ValidationError(
-                        _("The selected list item does not belong to this checklist.")
-                    )
-        
+        # Cross-model validations (e.g. belongs-to checks) moved to service layer.
         return data
 
 
@@ -696,48 +614,18 @@ class ChecklistCompositeSerializer(serializers.ModelSerializer):
             )
         return value
 
-    def _get_or_create_checklist_type(self, data, user):
-        if not data:
-            return None
-        ct_id = data.get("id")
-        name = data.get("name")
-        if ct_id:
-            try:
-                return ChecklistType.objects.get(pk=ct_id)
-            except ChecklistType.DoesNotExist:
-                raise serializers.ValidationError({"checklist_type": "ChecklistType with provided id does not exist."})
-        # create by name
-        if name:
-            ct, _ = ChecklistType.objects.get_or_create(name=name.strip(), defaults={
-                "description": "",
-                "created_by": user,
-                "last_updated_by": user,
-            })
-            return ct
-        return None
-
-    def _assign_roles(self, checklist, role_ids):
-        if not role_ids:
-            checklist.roles.clear()
-            return
-        roles_qs = Role.objects.filter(id__in=role_ids)
-        if roles_qs.count() != len(role_ids):
-            missing = set(role_ids) - set(roles_qs.values_list("id", flat=True))
-            raise serializers.ValidationError({"roles": f"Roles not found: {sorted(list(missing))}"})
-        checklist.roles.set(roles_qs)
+    # Composite serializer delegates all business and cross-model operations to the ChecklistService.
+    # It must not perform DB access itself.
 
     def create(self, validated_data):
-        request = self.context.get("request")
-        user = getattr(request, "user", None)
+        user = self.context.get("user")
         try:
             return ChecklistService.create_full_checklist(user, validated_data)
         except ValidationError as e:
-            # Map service validation to serializer validation errors
             raise serializers.ValidationError(e.detail if hasattr(e, 'detail') else str(e))
 
     def update(self, instance, validated_data):
-        request = self.context.get("request")
-        user = getattr(request, "user", None)
+        user = self.context.get("user")
         try:
             return ChecklistService.update_full_checklist(user, instance.id, validated_data)
         except ValidationError as e:
