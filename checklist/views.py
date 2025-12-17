@@ -174,7 +174,6 @@ class RoleViewSet(viewsets.ModelViewSet):
             logger.debug(f"User {request.user.id} listing roles")
             queryset = self.filter_queryset(self.get_queryset())
             serializer = self.get_serializer(queryset, many=True)
-            logger.info(f"Retrieved {len(queryset)} roles")
             return Response(serializer.data)
         except Exception as e:
             logger.error(f"Error listing roles: {str(e)}", exc_info=True)
@@ -187,7 +186,6 @@ class RoleViewSet(viewsets.ModelViewSet):
         """Get role details."""
         try:
             instance = self.get_object()
-            logger.debug(f"User {request.user.id} retrieving role {instance.id}")
             serializer = self.get_serializer(instance)
             return Response(serializer.data)
         except Exception as e:
@@ -206,10 +204,9 @@ class RoleViewSet(viewsets.ModelViewSet):
         """Get all checklists using this role."""
         try:
             role = self.get_object()
-            logger.debug(f"User {request.user.id} retrieving checklists for role {role.id}")
+            logger.debug(f"retrieving checklists for role {role.id}")
             checklists = role.checklists_roles.all().order_by('-created_at')
             serializer = ChecklistListSerializer(checklists, many=True)
-            logger.info(f"Retrieved {len(checklists)} checklists for role {role.id}")
             return Response(serializer.data)
         except Exception as e:
             logger.error(f"Error retrieving checklists for role: {str(e)}", exc_info=True)
@@ -231,10 +228,9 @@ class RoleViewSet(viewsets.ModelViewSet):
     def my_roles(self, request):
         """Get all roles assigned to the current user."""
         try:
-            logger.debug(f"User {request.user.id} retrieving their assigned roles")
+            logger.debug(f"retrieving roles for user {request.user.id}")
             roles = request.user.checklist_roles.all().order_by('name')
             serializer = self.get_serializer(roles, many=True)
-            logger.info(f"User {request.user.id} has {len(roles)} checklist roles")
             return Response(serializer.data)
         except Exception as e:
             logger.error(f"Error retrieving user roles: {str(e)}", exc_info=True)
@@ -331,10 +327,9 @@ class ChecklistTypeViewSet(viewsets.ModelViewSet):
         """Get checklist type statistics."""
         try:
             checklist_type = self.get_object()
-            logger.debug(f"User {request.user.id} retrieving stats for checklist type {checklist_type.id}")
+            logger.debug(f"retrieving stats for checklist type {checklist_type.id}")
             stats_data = ChecklistTypeService.get_checklist_type_stats(checklist_type.id)
             serializer = ChecklistStatsSerializer(stats_data)
-            logger.info(f"Retrieved stats for checklist type {checklist_type.id}")
             return Response(serializer.data)
         except ValidationError as e:
             logger.warning(f"Stats validation error: {str(e)}")
@@ -386,37 +381,38 @@ class ChecklistViewSet(viewsets.ModelViewSet):
         return ChecklistListSerializer
 
     def get_queryset(self):
-        """Optimize queryset with prefetching for sections and items in detail view."""
-        queryset = super().get_queryset()
+        """Optimize queryset and move counts into annotations.
+
+        - Annotate counts on all queries.
+        - Only prefetch nested sections+items for detail view.
+        """
+        queryset = super().get_queryset().select_related('checklist_type', 'created_by')
+
+        # common annotations (kept lightweight)
+        queryset = queryset.annotate(
+            sections_count=Count('sections', distinct=True),
+            items_count=Count('sections__listitem_set', distinct=True),
+            roles_count=Count('roles', distinct=True),
+            progress_count=Count('checklist_progress', distinct=True)
+        )
+
         if self.action == 'retrieve':
-            # For detail: prefetch sections with their items and progress counts
-            sections_prefetch = Prefetch(
-                'sections',
-                Sections.objects.prefetch_related(
-                    Prefetch(
-                        'section_listitems',
-                        ListItem.objects.select_related('created_by')
+            # Prefetch sections with nested items (use actual reverse name `listitem_set`)
+            sections_qs = Sections.objects.select_related('created_by', 'last_updated_by').prefetch_related(
+                Prefetch(
+                    'listitem_set',
+                    queryset=ListItem.objects.select_related('created_by').annotate(
+                        progress_count=Count('checklist_progress_items', distinct=True)
                     )
-                ).select_related('created_by', 'last_updated_by').annotate(
-                    list_items_count=Count('section_listitems', distinct=True)
                 )
+            ).annotate(list_items_count=Count('listitem_set', distinct=True))
+
+            sections_prefetch = Prefetch('sections', queryset=sections_qs)
+
+            queryset = queryset.prefetch_related(sections_prefetch, 'roles').select_related(
+                'checklist_type', 'created_by', 'last_updated_by'
             )
-            queryset = queryset.prefetch_related(
-                sections_prefetch,
-                'roles',
-                'checklist_progress'
-            ).select_related('checklist_type', 'created_by', 'last_updated_by').annotate(
-                sections_count=Count('sections', distinct=True),
-                items_count=Count('sections__section_listitems', distinct=True),
-                progress_count=Count('checklist_progress', distinct=True),
-                roles_count=Count('roles', distinct=True)
-            )
-        elif self.action == 'list':
-            # For list: minimal queries, just counts
-            queryset = queryset.select_related('checklist_type', 'created_by').annotate(
-                sections_count=Count('sections', distinct=True),
-                roles_count=Count('roles', distinct=True)
-            )
+
         return queryset
 
     def get_serializer_context(self):
@@ -449,6 +445,18 @@ class ChecklistViewSet(viewsets.ModelViewSet):
             logger.error(f"Error updating checklist: {str(e)}", exc_info=True)
             raise
 
+    def update(self, request, *args, **kwargs):
+        """Ensure composite serializer is used for update and return detailed representation."""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        # Use detailed serializer for response
+        detail_serializer = ChecklistDetailSerializer(self.get_object(), context=self.get_serializer_context())
+        return Response(detail_serializer.data)
+
     def perform_destroy(self, instance):
         """Delete checklist."""
         try:
@@ -466,13 +474,7 @@ class ChecklistViewSet(viewsets.ModelViewSet):
     def retrieve(self, request, *args, **kwargs):
         """Get checklist details with full section/item hierarchy."""
         instance = self.get_object()
-        
-        # Annotate list items with counts for nested serializer
-        for section in instance.sections.all():
-            for item in section.section_listitems.all():
-                item.progress_count = Count('checklist_progress_items').filter(
-                    items=item
-                ).count() if hasattr(item, 'checklist_progress_items') else 0
+
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
@@ -485,10 +487,9 @@ class ChecklistViewSet(viewsets.ModelViewSet):
         """Get all sections in this checklist."""
         try:
             checklist = self.get_object()
-            logger.debug(f"User {request.user.id} retrieving sections for checklist {checklist.id}")
+            logger.debug(f"retrieving sections for checklist {checklist.id}")
             sections = ChecklistService.get_checklist_sections(checklist.id)
             serializer = SectionBasicSerializer(sections, many=True)
-            logger.info(f"Retrieved {len(sections)} sections for checklist {checklist.id}")
             return Response(serializer.data)
         except ValidationError as e:
             logger.warning(f"Sections retrieval error: {str(e)}")
@@ -509,10 +510,9 @@ class ChecklistViewSet(viewsets.ModelViewSet):
         """Get checklist statistics."""
         try:
             checklist = self.get_object()
-            logger.debug(f"User {request.user.id} retrieving stats for checklist {checklist.id}")
+            logger.debug(f"retrieving stats for checklist {checklist.id}")
             stats_data = ChecklistService.get_checklist_stats(checklist.id)
             serializer = ChecklistStatsSerializer(stats_data)
-            logger.info(f"Retrieved stats for checklist {checklist.id}")
             return Response(serializer.data)
         except ValidationError as e:
             logger.warning(f"Stats retrieval error: {str(e)}")
@@ -624,10 +624,9 @@ class SectionViewSet(viewsets.ModelViewSet):
         """Get all list items in this section."""
         try:
             section = self.get_object()
-            logger.debug(f"User {request.user.id} retrieving items for section {section.id}")
+            logger.debug(f"retrieving items for section {section.id}")
             items = SectionService.get_section_items(section.id)
             serializer = ListItemBasicSerializer(items, many=True)
-            logger.info(f"Retrieved {len(items)} items for section {section.id}")
             return Response(serializer.data)
         except ValidationError as e:
             logger.warning(f"Items retrieval error: {str(e)}")
@@ -844,10 +843,9 @@ class ChecklistProgressViewSet(viewsets.ModelViewSet):
     def my_progress(self, request):
         """Get current user's progress records."""
         try:
-            logger.debug(f"User {request.user.id} retrieving own progress")
+            logger.debug(f"retrieving progress for user {request.user.id}")
             progress = ChecklistProgressService.get_user_all_progress(request.user.id)
             serializer = self.get_serializer(progress, many=True)
-            logger.info(f"Retrieved {len(progress)} progress records for user {request.user.id}")
             return Response(serializer.data)
         except Exception as e:
             logger.error(f"Error retrieving user progress: {str(e)}", exc_info=True)
@@ -871,10 +869,9 @@ class ChecklistProgressViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            logger.debug(f"User {request.user.id} retrieving stats for checklist {checklist_id}")
+            logger.debug(f"retrieving progress stats for checklist {checklist_id}")
             stats_data = ChecklistProgressService.get_checklist_progress_stats(int(checklist_id))
             serializer = ChecklistProgressStatsSerializer(stats_data)
-            logger.info(f"Retrieved stats for checklist {checklist_id}")
             return Response(serializer.data)
         except ValidationError as e:
             logger.warning(f"Stats retrieval error: {str(e)}")
@@ -900,10 +897,9 @@ class ChecklistProgressViewSet(viewsets.ModelViewSet):
     def summary(self, request):
         """Get user's progress summary."""
         try:
-            logger.debug(f"User {request.user.id} retrieving progress summary")
+            logger.debug(f"retrieving progress summary for user {request.user.id}")
             summary_data = ChecklistProgressService.get_user_progress_summary(request.user.id)
             serializer = UserProgressSummarySerializer(summary_data)
-            logger.info(f"Retrieved progress summary for user {request.user.id}")
             return Response(serializer.data)
         except Exception as e:
             logger.error(f"Error retrieving summary: {str(e)}", exc_info=True)

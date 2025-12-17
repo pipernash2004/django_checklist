@@ -202,7 +202,7 @@ class ListItem(models.Model):
 
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
-    section = models.ForeignKey(Sections, on_delete=models.CASCADE)
+    section = models.ForeignKey(Sections, on_delete=models.CASCADE , related_name='listitem_set', null=True)
     created_at = models.DateTimeField(auto_now_add=True, verbose_name=_("Created At"))
     updated_at = models.DateTimeField(auto_now=True, verbose_name=_("Updated At"))
     created_by = models.ForeignKey(

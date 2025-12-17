@@ -165,10 +165,14 @@ class SectionBasicSerializer(serializers.ModelSerializer):
 
 
 class ListItemNestedSerializer(serializers.ModelSerializer):
-    """Serializer for list items nested in sections (detail view)."""
-    created_by = UserBasicSerializer(read_only=True)
-    progress_count = serializers.IntegerField(read_only=True)
+    """Serializer for list items nested in sections (detail view).
     
+    Used only for reading nested list items within sections.
+    Exposes annotated progress_count from the prefetched queryset.
+    """
+    created_by = UserBasicSerializer(read_only=True)
+    progress_count = serializers.SerializerMethodField()
+
     class Meta:
         model = ListItem
         fields = [
@@ -176,22 +180,46 @@ class ListItemNestedSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at', 'created_by'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
+    
+    def get_progress_count(self, obj):
+        """Get progress count from annotated field if available, else query."""
+        # If the queryset was prefetched with annotation, use it
+        if hasattr(obj, 'progress_count'):
+            return obj.progress_count
+        # Fallback for cases where annotation wasn't applied
+        return obj.checklist_progress_items.count()
 
 
 class SectionWithItemsSerializer(serializers.ModelSerializer):
-    """Serializer for sections with nested items (for detail view)."""
+    """Serializer for sections with nested list items (for detail/read view).
+    
+    This is the primary serializer for reading sections in detail views.
+    It includes all nested list items using the ListItemNestedSerializer.
+    Uses the actual reverse relation name 'listitem_set' from the ListItem model.
+    
+    Depends on proper prefetching in the view's get_queryset().
+    """
     created_by = UserBasicSerializer(read_only=True)
     last_updated_by = UserBasicSerializer(read_only=True)
-    section_listitems = ListItemNestedSerializer(many=True, read_only=True, source='section_listitems.all')
-    list_items_count = serializers.IntegerField(read_only=True)
-    
+    # Use the actual reverse relation from ListItem model (listitem_set since no related_name specified)
+    items = ListItemNestedSerializer(many=True, read_only=True, source='listitem_set')
+    list_items_count = serializers.SerializerMethodField()
+
     class Meta:
         model = Sections
         fields = [
             'id', 'name', 'description', 'order', 'list_items_count',
-            'section_listitems', 'created_at', 'updated_at', 'created_by', 'last_updated_by'
+            'items', 'created_at', 'updated_at', 'created_by', 'last_updated_by'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
+    
+    def get_list_items_count(self, obj):
+        """Get list items count from annotated field if available, else query."""
+        # If the queryset was annotated with list_items_count, use it
+        if hasattr(obj, 'list_items_count'):
+            return obj.list_items_count
+        # Fallback for cases where annotation wasn't applied
+        return obj.listitem_set.count()
 
 
 class SectionDetailSerializer(serializers.ModelSerializer):
@@ -348,15 +376,29 @@ class ChecklistListSerializer(serializers.ModelSerializer):
    
 
 class ChecklistDetailSerializer(serializers.ModelSerializer):
-    """Serializer for detailed checklist information with full section/item hierarchy."""
+    """Serializer for detailed checklist information with full section/item hierarchy.
+    
+    This is the primary read serializer for /checklists/{id}/ endpoint.
+    It returns the complete hierarchy:
+    - Checklist
+      - Sections (with nested ListItems)
+        - ListItems (with progress counts)
+    
+    All counts (sections_count, items_count, progress_count) are exposed from
+    annotated fields provided by the view's get_queryset().
+    
+    Sections are nested using SectionWithItemsSerializer which includes all items
+    with proper prefetching for optimal performance.
+    """
     checklist_type = ChecklistTypeListSerializer(read_only=True)
     created_by = UserBasicSerializer(read_only=True)
     last_updated_by = UserBasicSerializer(read_only=True)
+    # Use dedicated section serializer that includes nested items
     sections = SectionWithItemsSerializer(many=True, read_only=True)
     roles = RoleListSerializer(many=True, read_only=True)
-    sections_count = serializers.IntegerField(read_only=True)
-    items_count = serializers.IntegerField(read_only=True)
-    progress_count = serializers.IntegerField(read_only=True)
+    sections_count = serializers.SerializerMethodField()
+    items_count = serializers.SerializerMethodField()
+    progress_count = serializers.SerializerMethodField()
     
     class Meta:
         model = Checklist
@@ -367,6 +409,25 @@ class ChecklistDetailSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at', 'created_by', 'last_updated_by'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'last_updated_by']
+    
+    def get_sections_count(self, obj):
+        """Get sections count from annotated field if available, else query."""
+        if hasattr(obj, 'sections_count'):
+            return obj.sections_count
+        return obj.sections.count()
+    
+    def get_items_count(self, obj):
+        """Get total items count from annotated field if available, else query."""
+        if hasattr(obj, 'items_count'):
+            return obj.items_count
+        # Count all items across all sections
+        return ListItem.objects.filter(section__checklist=obj).count()
+    
+    def get_progress_count(self, obj):
+        """Get progress records count from annotated field if available, else query."""
+        if hasattr(obj, 'progress_count'):
+            return obj.progress_count
+        return obj.checklist_progress.count()
     
 
 
