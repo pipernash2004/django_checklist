@@ -393,6 +393,7 @@ class ChecklistDetailSerializer(serializers.ModelSerializer):
     checklist_type = ChecklistTypeListSerializer(read_only=True)
     created_by = UserBasicSerializer(read_only=True)
     last_updated_by = UserBasicSerializer(read_only=True)
+    
     # Use dedicated section serializer that includes nested items
     sections = SectionWithItemsSerializer(many=True, read_only=True)
     roles = RoleListSerializer(many=True, read_only=True)
