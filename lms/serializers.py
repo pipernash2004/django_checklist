@@ -533,67 +533,6 @@ class NestedLessonSerializer(serializers.ModelSerializer):
 
 
 class CourseFullCreateSerializer(serializers.ModelSerializer):
-    """
-    Full course creation serializer with nested lessons and assessments.
-    
-    Allows creating a complete course structure in one request:
-    - Course
-    - Lessons (with all lesson details)
-    - Assessments (with questions and choices)
-    
-    Example:
-    POST /api/courses/full-create/
-    {
-        "title": "Python 101",
-        "description": "Learn Python basics",
-        "level": "beginner",
-        "status": "draft",
-        "course_type": "free",
-        "content_type": "video",
-        "duration_weeks": 4,
-        "instructor": 1,
-        "skills": ["Python", "Programming"],
-        "requirements": ["Basic Math"],
-        "outcomes": ["Write Python code", "Understand OOP"],
-        "thumbnail": null,
-        "lessons": [
-            {
-                "title": "Introduction",
-                "description": "Course overview",
-                "order": 1,
-                "duration_minutes": 30,
-                "content_url": "https://example.com/video1"
-            },
-            {
-                "title": "Variables",
-                "description": "Learn variables",
-                "order": 2,
-                "duration_minutes": 45,
-                "content_url": "https://example.com/video2"
-            }
-        ],
-        "assessments": [
-            {
-                "title": "Quiz 1",
-                "description": "Chapter 1 Quiz",
-                "pass_mark": 70,
-                "is_published": false,
-                "questions": [
-                    {
-                        "text": "What is a variable?",
-                        "order": 1,
-                        "question_type": "mcq",
-                        "choices": [
-                            {"text": "A container for data", "is_correct": true},
-                            {"text": "A function", "is_correct": false},
-                            {"text": "A class", "is_correct": false}
-                        ]
-                    }
-                ]
-            }
-        ]
-    }
-    """
     lessons = NestedLessonSerializer(many=True, required=False)
     assessments = NestedAssessmentSerializer(many=True, required=False)
     
@@ -607,10 +546,6 @@ class CourseFullCreateSerializer(serializers.ModelSerializer):
     
     @transaction.atomic
     def create(self, validated_data):
-        """
-        Create course with nested lessons and assessments.
-        Uses transaction.atomic to ensure all-or-nothing behavior.
-        """
         request = self.context.get('request')
         lessons_data = validated_data.pop('lessons', [])
         assessments_data = validated_data.pop('assessments', [])
