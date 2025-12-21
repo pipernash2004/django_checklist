@@ -29,6 +29,8 @@ urlpatterns = [
 
     path('api/auth/', include('authentication.urls')),
     path('api/checklist/', include('checklist.urls')),
-    path('api/lms/', include('learningMS.urls')),
+    path('api/logs/', include('logs.urls')),
+    # path('api/lems/', include('learningMS.urls')),
+    path('api/learning/', include("lms.urls") )
    
 ]

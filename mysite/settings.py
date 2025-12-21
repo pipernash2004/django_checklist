@@ -47,7 +47,9 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     'authentication.apps.AuthenticationConfig',
     'checklist',
-    'learningMS',
+    # 'learningMS',
+    'lms',
+    'logs',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
