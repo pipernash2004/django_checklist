@@ -63,6 +63,7 @@ class Course(UserStampedModel,TimeStampedModel):
     skills = models.JSONField(default=list, help_text='Skills taught in this course')
     requirements = models.JSONField(default=list, help_text='Prerequisites for this course')
     outcomes = models.JSONField(default=list, help_text='Learning outcomes of this course')
+  
     description = models.TextField(blank=True)
     level = models.CharField(
         max_length=20,
@@ -78,9 +79,7 @@ class Course(UserStampedModel,TimeStampedModel):
     blank=True,
     null=True
 )
-
-
-   
+  
 
     def __str__(self):
         return self.title
@@ -102,7 +101,7 @@ class Lesson(TimeStampedModel,UserStampedModel):
 
     class Meta:
         ordering = ["order"]
-        # unique_together = ("course", "order")
+        unique_together = ("course", "order")
 
     def __str__(self):
         return f"{self.course.title} - {self.title}"
@@ -142,6 +141,11 @@ class LessonProgress(TimeStampedModel):
 
 
 class Review(TimeStampedModel,UserStampedModel):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     course = models.ForeignKey(
         Course,
@@ -149,8 +153,8 @@ class Review(TimeStampedModel,UserStampedModel):
         on_delete=models.CASCADE
     )
     rating = models.PositiveSmallIntegerField()  # 1–5
-    comment = models.TextField(blank=True)
- 
+    comment = models.TextField(blank=True) 
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
 
     class Meta:
         unique_together = ("user", "course")
@@ -249,3 +253,51 @@ class Answer(TimeStampedModel):
 
     class Meta:
         unique_together = ("attempt", "question")
+
+
+
+class ActivityLog(UserStampedModel, TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="activities"
+    )
+
+    action = models.CharField(
+        max_length=50,
+        choices=(
+            ("enrolled", "Enrolled"),
+            ("completed", "Completed"),
+            ("submitted_review", "Submitted Review"),
+            ("uploaded", "Uploaded"),
+            ("created", "Created"),
+        )
+    )
+
+    # Generic target reference
+    target_type = models.CharField(
+        max_length=100,
+        help_text="Model name of the target (e.g. Course, Lesson, Assessment)"
+    )
+
+    target_id = models.PositiveIntegerField(
+        help_text="Primary key of the target object"
+    )
+
+    target_name = models.CharField(
+        max_length=255,
+        help_text="Human-readable name for fast display"
+    )
+
+
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["created_at"]),
+            models.Index(fields=["action"]),
+            models.Index(fields=["target_type", "target_id"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user} {self.action} {self.target_name}"

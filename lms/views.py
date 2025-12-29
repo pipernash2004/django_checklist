@@ -1,15 +1,11 @@
-
-# Logger setup
-
-
-
+from functools import partial
+from rest_framework.decorators import action
 from .models import *
 from .serializers import *
 from .management.StandardResultsSetPagination import StandardResultsSetPagination
-
-
 from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated
+from drf_spectacular.utils import OpenApiResponse
 from rest_framework.response import Response
 from django.db import transaction
 from django_filters.rest_framework import DjangoFilterBackend
@@ -22,11 +18,21 @@ from .models import Course
 from .serializers import (
     CourseListSerializer,
     CourseDetailSerializer,
-    CourseCreateUpdateSerializer
+    CourseCreateUpdateSerializer,
+    CourseFullCreateSerializer,
+    LessonSerializer,
+    AssessmentSerializer,
+    QuestionSerializer,
+    ChoiceSerializer,   
+    LessonNestedSerializer,
+    CourseCreateUpdateSerializer,
+    EnrollmentSerializer
+
 )
+from drf_spectacular.utils import extend_schema
 from logs.models import SystemLog
 
-
+# Logger setup
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +46,21 @@ class CourseViewSet(viewsets.ModelViewSet):
     filterset_fields = ['status', 'level', 'course_type']
     ordering_fields = '__all__'
     ordering = ['-id']
+
+
+
+    def get_serializer_class(self):
+        if self.action == "full_create":
+            return CourseFullCreateSerializer
+        elif self.action in [ "update", "partial_update"]:
+            return CourseCreateUpdateSerializer
+        elif self.action == "list":
+            return CourseListSerializer
+        elif self.action == "create":
+            return CourseCreateUpdateSerializer
+        elif self.action == "retrieve":
+            return CourseDetailSerializer
+        return CourseListSerializer
 
     # ---------------------------
     # Helper: sanitize request data
@@ -116,7 +137,7 @@ class CourseViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         try:
             sanitized_data = self._sanitize_request_data(request.data)
-            serializer = CourseCreateUpdateSerializer(data=request.data, context={'request': request})
+            serializer =   CourseCreateUpdateSerializer(data=request.data, context={'request': request})
             serializer.is_valid(raise_exception=True)
             instance = serializer.save(created_by=request.user, updated_by=request.user)
 
@@ -133,7 +154,46 @@ class CourseViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.error(f"Error creating course: {str(e)}", exc_info=True)
             return Response({"detail": f"Failed to create course: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+    # ---------------------------
+    # fULLCREATECOURSE
+    # ---------------------------
+    
+    @extend_schema(
+        responses={201: OpenApiResponse(response=CourseFullCreateSerializer)}
+    )
+    @action(detail=False, methods=['post'], url_path='full-create', permission_classes=[IsAuthenticated])
+    @transaction.atomic
+    def full_create(self, request, *args, **kwargs):
+        try:
+         
+            serializer = CourseFullCreateSerializer(
+                data=request.data,
+                context={'request': request}
+            )
+            serializer.is_valid(raise_exception=True)
+            instance = serializer.save()
 
+            
+            sanitized_data = self._sanitize_request_data(request.data)
+
+            SystemLog.log_action(
+                user=request.user,
+                action='CREATE',
+                table_name='course',
+                record_id=str(instance.pk),
+                ip_address=request.META.get('REMOTE_ADDR'),
+                additional_info=f"Created full course '{instance.title}' with data: {json.dumps(sanitized_data)}"
+            )
+
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            logger.error("Error creating full course", exc_info=True)
+            return Response(
+                {"detail": f"Failed to create course: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
     # ---------------------------
     # UPDATE / PARTIAL_UPDATE
     # ---------------------------
@@ -787,3 +847,99 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.error(f"Error deleting enrollment: {str(e)}", exc_info=True)
             return Response({"detail": f"Failed to delete enrollment: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+# ---------------------------
+# ReviewSet
+# ---------------------------
+
+
+class ReviewViewSet(viewsets.ModelViewSet): 
+    queryset = Review.objects.all().select_related('user', 'course')
+    serializer_class = ReviewSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['course', 'user']
+
+      # ---------------------------
+    # Helper: sanitize request data
+    # ---------------------------
+    def _sanitize_request_data(self, data):
+        """Mask sensitive fields and uploaded files in request data"""
+        def sanitize_value(value):
+            if isinstance(value, dict):
+                return {k: sanitize_value(v) for k, v in value.items()}
+            elif isinstance(value, list):
+                return [sanitize_value(v) for v in value]
+            elif isinstance(value, UploadedFile):
+                return f"File: {value.name} (size: {value.size} bytes)"
+            return value
+
+        sanitized = data.copy() if isinstance(data, dict) else dict(data)
+        sensitive_fields = getattr(settings, 'SENSITIVE_FIELDS', ['password', 'token'])
+        for key in list(sanitized.keys()):
+            if key in sensitive_fields:
+                sanitized[key] = '****'
+            else:
+                sanitized[key] = sanitize_value(sanitized[key])
+        return sanitized
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        try:
+            sanitized_data = self._sanitize_request_data(request.data)
+            serializer = self.get_serializer(data=request.data, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            instance = serializer.save(user=request.user)
+
+            SystemLog.log_action(
+                user=request.user,
+                action='CREATE',
+                table_name='review',
+                record_id=str(instance.pk),
+                ip_address=request.META.get('REMOTE_ADDR'),
+                additional_info=f"Created review by user {request.user} for course {instance.course.title} with data: {json.dumps(sanitized_data)}"
+            )
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            logger.error(f"Error creating review: {str(e)}", exc_info=True)
+            return Response({"detail": f"Failed to create review: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+    @transaction.atomic     
+    def update(self, request, *args, **kwargs):
+        try:
+            partial = kwargs.get('partial', False)
+            instance = self.get_object()
+            sanitized_data = sanitize_request_data(request.data)
+
+            serializer = self.get_serializer(instance, data=request.data, partial=partial, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+            SystemLog.log_action(
+                user=request.user,
+                action='UPDATE',
+                table_name='review',
+                record_id=str(instance.pk),
+                ip_address=request.META.get('REMOTE_ADDR'),
+                additional_info=f"Updated review by user {instance.user} for course {instance.course.title} with data: {json.dumps(sanitized_data)}"
+            )
+            return Response(serializer.data)
+        except Exception as e:
+            logger.error(f"Error updating review: {str(e)}", exc_info=True)
+            return Response({"detail": f"Failed to update review: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+    @transaction.atomic 
+    def destroy(self, request, *args, **kwargs):
+        try:
+            instance = self.get_object()
+            SystemLog.log_action(
+                user=request.user,
+                action='DELETE',
+                table_name='review',
+                record_id=str(instance.pk),
+                ip_address=request.META.get('REMOTE_ADDR'),
+                additional_info=f"Deleted review by user {instance.user} for course {instance.course.title}"
+            )
+            return super().destroy(request, *args, **kwargs)
+        except Exception as e:
+            logger.error(f"Error deleting review: {str(e)}", exc_info=True)
+            return Response({"detail": f"Failed to delete review: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+    
+    

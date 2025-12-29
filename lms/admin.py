@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.utils.html import format_html
 from .models import (
     Course, Lesson, Enrollment, LessonProgress, Review, Answer,
-    Assessment, AssessmentAttempt, Choice, Question
+    Assessment, AssessmentAttempt, Choice, Question, ActivityLog
 )
 
 
@@ -73,6 +73,7 @@ class AssessmentInline(admin.TabularInline):
     model = Assessment
     extra = 1
     fields = ['title', 'pass_mark', 'is_published']
+    inlines = [QuestionInline, ChoiceInline]
 
 
 class AnswerInline(admin.TabularInline):
@@ -347,7 +348,7 @@ class ReviewAdmin(admin.ModelAdmin):
     
     def star_rating(self, obj):
         """Display rating as stars."""
-        stars = '⭐' * obj.rating
+        stars =  obj.rating
         return format_html('{} ({})', stars, obj.rating)
     star_rating.short_description = 'Rating'
     
@@ -484,10 +485,28 @@ class QuestionAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 
+
+# ============================================================
+# Activity ADMIN
+# ============================================================
+@admin.register(ActivityLog)
+class ActivityLogAdmin(admin.ModelAdmin):
+    list_display = (
+        "user",
+        "action",
+        "target_type",
+        "target_name",
+        "created_at",
+    )
+    list_filter = ("action", "target_type", "created_at")
+    search_fields = ("target_name", "user__username")
+    ordering = ("-created_at",)
+
+
+
 # ============================================================
 # CHOICE ADMIN
 # ============================================================
-
 @admin.register(Choice)
 class ChoiceAdmin(admin.ModelAdmin):
     """
