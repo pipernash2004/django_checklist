@@ -229,6 +229,7 @@ class AssessmentAttempt(TimeStampedModel):
     score = models.FloatField(default=0)
     passed = models.BooleanField(default=False)
     completed_at = models.DateTimeField(null=True, blank=True)
+       
 
     class Meta:
         unique_together = ("user", "assessment")
@@ -274,7 +275,7 @@ class ActivityLog(UserStampedModel, TimeStampedModel):
         )
     )
 
-    # Generic target reference
+    
     target_type = models.CharField(
         max_length=100,
         help_text="Model name of the target (e.g. Course, Lesson, Assessment)"

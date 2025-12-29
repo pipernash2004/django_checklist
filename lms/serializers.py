@@ -5,7 +5,7 @@ from django.utils import timezone
 from .models import (
     Course, Lesson, Enrollment, LessonProgress,
     Choice, Question, Assessment, Review,
-    Answer, AssessmentAttempt
+    Answer, AssessmentAttempt, ActivityLog
 )
 
 # ============================================================
@@ -366,16 +366,44 @@ class ReviewSerializer(serializers.ModelSerializer):
         model = Review
         fields = ["id", "user", "course", "rating", "comment", "created_at"]
         read_only_fields = ["created_at"]
-class DashboardCourseSerializer(serializers.Serializer):
-    enrollments_count = serializers.IntegerField()
-    average_rating = serializers.FloatField()
+
+# ============================================================
+# Dashboard SERIALIZERS
+# ============================================================
+class StatsSerializer(serializers.Serializer):
+    total_courses = serializers.IntegerField()
+    total_students = serializers.IntegerField()
+    pending_reviews = serializers.IntegerField()
+    active_assessments = serializers.IntegerField()
+    
+    
+class EnrollmentTrendItemSerializer(serializers.Serializer):
+    date = serializers.DateField()
+    label = serializers.CharField()
+    count = serializers.IntegerField(min_value=0)
+
+class EnrollmentTrendSerializer(serializers.Serializer):
+    range = serializers.CharField()
+    growth_percentage = serializers.FloatField()
+    data = EnrollmentTrendItemSerializer(many=True)
+
+
+  
+
+class ActivityLogSerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source="user.username", read_only=True)
+  
 
     class Meta:
-        model = Course
+        model = ActivityLog
         fields = [
-        
-            "title",
-            "instructor",
-            "enrollments_count",
-            "average_rating",
+            "user_name",
+            "action",
+            "target_name",
+            "created_at",
         ]
+    
+class DashboardSerializer(serializers.Serializer):
+    stats = StatsSerializer()
+    enrollment_trends = EnrollmentTrendSerializer()
+    recent_activities = ActivityLogSerializer(many=True)

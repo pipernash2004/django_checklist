@@ -26,7 +26,8 @@ from .serializers import (
     ChoiceSerializer,   
     LessonNestedSerializer,
     CourseCreateUpdateSerializer,
-    EnrollmentSerializer
+    EnrollmentSerializer,
+    DashboardSerializer
 
 )
 from drf_spectacular.utils import extend_schema
@@ -35,7 +36,32 @@ from logs.models import SystemLog
 # Logger setup
 logger = logging.getLogger(__name__)
 
+class DashboardViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        responses={200: DashboardSerializer}
+    )
+    @action(detail=False, methods=['get'], url_path='overview', permission_classes=[IsAuthenticated])
+    def stats(self, request, *args, **kwargs):
+        try:
+            total_courses = Course.objects.count()
+            total_students = Enrollment.objects.values('user').distinct().count()
+            pending_reviews = Review.objects.filter(status='pending').count()
+            active_assessments = Assessment.objects.filter(is_published=True).count()
+            
+            data = {
+                'total_courses': total_courses,
+                'total_students': total_students,
+                'pending_reviews': pending_reviews,
+                'active_assessments': active_assessments,
+            }
+            serializer = DashboardSerializer(data)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Error fetching dashboard stats: {str(e)}", exc_info=True)
+            return Response({"detail": "Failed to fetch dashboard stats"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
 class CourseViewSet(viewsets.ModelViewSet):
     queryset = Course.objects.all().select_related('instructor', 'created_by', 'updated_by')
     permission_classes = [IsAuthenticated]
@@ -941,5 +967,4 @@ class ReviewViewSet(viewsets.ModelViewSet):
             return Response({"detail": f"Failed to delete review: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
-    
     
