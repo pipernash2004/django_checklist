@@ -21,6 +21,7 @@ router.register(r'questions', QuestionViewSet, basename='question')
 router.register(r'choices', ChoiceViewSet, basename='choice')
 router.register(r'enrollments', EnrollmentViewSet, basename='enrollment')
 router.register(r'reviews', ReviewViewSet, basename='review')
+
 # # router.register(r'assessment-attempts', AssessmentAttemptViewSet, basename='assessmentattempt')
 
 # URL patterns

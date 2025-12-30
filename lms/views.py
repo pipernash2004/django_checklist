@@ -8,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from drf_spectacular.utils import OpenApiResponse
 from rest_framework.response import Response
 from django.db import transaction
+from  django.db.models import Count
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.core.files.uploadedfile import UploadedFile
@@ -32,36 +33,75 @@ from .serializers import (
 )
 from drf_spectacular.utils import extend_schema
 from logs.models import SystemLog
-
+from django.utils import timezone
+from datetime import timedelta
 # Logger setup
 logger = logging.getLogger(__name__)
 
-class DashboardViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated]
 
-    @extend_schema(
-        responses={200: DashboardSerializer}
-    )
-    @action(detail=False, methods=['get'], url_path='overview', permission_classes=[IsAuthenticated])
-    def stats(self, request, *args, **kwargs):
+class DashboardViewSet(viewsets.ViewSet):
+    
+    serializer_class = DashboardSerializer
+
+    @extend_schema(responses={200: DashboardSerializer})
+    @action(detail=False, methods=["get"], url_path="overview", permission_classes=[IsAuthenticated])
+    def stats(self, request):
         try:
             total_courses = Course.objects.count()
-            total_students = Enrollment.objects.values('user').distinct().count()
-            pending_reviews = Review.objects.filter(status='pending').count()
+            total_students = Enrollment.objects.values("user").distinct().count()
+            pending_reviews = Review.objects.filter(status="pending").count()
             active_assessments = Assessment.objects.filter(is_published=True).count()
-            
-            data = {
-                'total_courses': total_courses,
-                'total_students': total_students,
-                'pending_reviews': pending_reviews,
-                'active_assessments': active_assessments,
+
+            # ---- Enrollment Trends ----
+            today = timezone.now().date()
+            start_date = today - timedelta(days=6)
+
+            enrollments = (
+                Enrollment.objects
+                .filter(created_at__date__gte=start_date)
+                .values("created_at__date")
+                .annotate(count=Count("id"))
+            )
+
+            trend_data = []
+            for i in range(7):
+                day = start_date + timedelta(days=i)
+                count = next(
+                    (e["count"] for e in enrollments if e["created_at__date"] == day),
+                    0
+                )
+                trend_data.append({
+                    "date": day,
+                    "label": day.strftime("%b %d"),
+                    "count": count,
+                })
+
+            dashboard_data = {
+                "stats": {
+                    "total_courses": total_courses,
+                    "total_students": total_students,
+                    "pending_reviews": pending_reviews,
+                    "active_assessments": active_assessments,
+                },
+                "enrollment_trends": {
+                    "range": "last_7_days",
+                    "growth_percentage": 0.0,
+                    "data": trend_data,
+                },
+                "recent_activities": ActivityLog.objects.order_by("-created_at")[:10]
+
             }
-            serializer = DashboardSerializer(data)
+
+            serializer = DashboardSerializer(dashboard_data)
             return Response(serializer.data, status=status.HTTP_200_OK)
+
         except Exception as e:
-            logger.error(f"Error fetching dashboard stats: {str(e)}", exc_info=True)
-            return Response({"detail": "Failed to fetch dashboard stats"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+            logger.error(f"Dashboard error: {str(e)}", exc_info=True)
+            return Response(
+                {"detail": "Failed to fetch dashboard data"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
 class CourseViewSet(viewsets.ModelViewSet):
     queryset = Course.objects.all().select_related('instructor', 'created_by', 'updated_by')
     permission_classes = [IsAuthenticated]
@@ -167,6 +207,14 @@ class CourseViewSet(viewsets.ModelViewSet):
             serializer.is_valid(raise_exception=True)
             instance = serializer.save(created_by=request.user, updated_by=request.user)
 
+            ActivityLog.objects.create(
+                    user=request.user,
+                    action="created",
+                    target_type="Course",
+                    target_id=instance.pk,
+                    target_name=instance.title,
+                )
+            
             SystemLog.log_action(
                 user=request.user,
                 action='CREATE',
@@ -201,7 +249,14 @@ class CourseViewSet(viewsets.ModelViewSet):
 
             
             sanitized_data = self._sanitize_request_data(request.data)
-
+            
+            ActivityLog.objects.create(
+                    user=request.user,
+                    action="created",
+                    target_type="Course",
+                    target_id=instance.pk,
+                    target_name=instance.title,
+                )
             SystemLog.log_action(
                 user=request.user,
                 action='CREATE',
@@ -373,6 +428,14 @@ class LessonViewSet(viewsets.ModelViewSet):
             serializer.is_valid(raise_exception=True)
             instance = serializer.save(created_by=request.user, updated_by=request.user)
 
+            ActivityLog.objects.create(
+                    user=request.user,
+                    action="uploaded",
+                    target_type="Lesson",
+                    target_id=instance.pk,
+                    target_name=instance.title,
+                )
+
             SystemLog.log_action(
                 user=request.user,
                 action='CREATE',
@@ -527,6 +590,14 @@ class AssessmentViewSet(viewsets.ModelViewSet):
             serializer.is_valid(raise_exception=True)
             instance = serializer.save(created_by=request.user, updated_by=request.user)
 
+            ActivityLog.objects.create(
+                    user=request.user,
+                    action="uploaded",
+                    target_type="Assessment",
+                    target_id=instance.pk,
+                    target_name=instance.title,
+                )
+
             SystemLog.log_action(
                 user=request.user,
                 action='CREATE',
@@ -634,6 +705,15 @@ class QuestionViewSet(viewsets.ModelViewSet):
             serializer.is_valid(raise_exception=True)
             instance = serializer.save(created_by=request.user, updated_by=request.user)
 
+
+            ActivityLog.objects.create(
+                    user=request.user,
+                    action="uploaded",
+                    target_type="Question",
+                    target_id=instance.pk,
+                    target_name=instance.text,
+                )
+
             SystemLog.log_action(
                 user=request.user,
                 action='CREATE',
@@ -729,6 +809,14 @@ class ChoiceViewSet(viewsets.ModelViewSet):
             serializer.is_valid(raise_exception=True)
             instance = serializer.save(created_by=request.user, updated_by=request.user)
 
+            ActivityLog.objects.create(
+                    user=request.user,
+                    action="uploaded",
+                target_type="Choice",
+                    target_id=instance.pk,
+                    target_name=instance.text,
+                )
+
             SystemLog.log_action(
                 user=request.user,
                 action='CREATE',
@@ -819,6 +907,13 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(data=request.data, context={'request': request})
             serializer.is_valid(raise_exception=True)
             instance = serializer.save(user=request.user)
+            ActivityLog.objects.create(
+                        user=request.user,
+                        action="enrolled",
+                        target_type="Enrollment",
+                        target_id=instance.pk,
+                        target_name=instance.course.title,
+                    )
 
             SystemLog.log_action(
                 user=request.user,
@@ -914,6 +1009,14 @@ class ReviewViewSet(viewsets.ModelViewSet):
             serializer.is_valid(raise_exception=True)
             instance = serializer.save(user=request.user)
 
+            ActivityLog.objects.create(
+                    user=request.user,
+                    action="submitted_review",
+                    target_type="Review",
+                    target_id=instance.pk,
+                    target_name=instance.comment[:50],
+                )
+                
             SystemLog.log_action(
                 user=request.user,
                 action='CREATE',
