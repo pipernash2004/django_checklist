@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 
 User = settings.AUTH_USER_MODEL
 
@@ -130,15 +131,43 @@ class Enrollment(TimeStampedModel):
 
 
 class LessonProgress(TimeStampedModel):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    """
+    Tracks the progress of a user in a specific lesson. 
+    Designed to handle different lesson types: video links, articles, pdfs
+    """
+    user = models.ForeignKey(Enrollment.course.user, on_delete=models.CASCADE, related_name="lesson_progress")
     lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE)
     is_completed = models.BooleanField(default=False)
-
     completed_at = models.DateTimeField(null=True, blank=True)
+    progress_value = models.FloatField(default=0.0, help_text="Progress percentage (0.0 to 100.0)")
+    session_data  = models.JSONField(default=dict, help_text="Stores optional metadata like video seconds watched, PDF time spent, scroll %")
 
     class Meta:
         unique_together = ("user", "lesson")
+        ordering = ["lesson"]
+    def __str__(self):
+        return f"{self.user} - {self.lesson.title} - {'Completed' if self.is_completed else 'In Progress'})"
+    
 
+    def mark_completed(self):
+        self.is_completed = True
+        self.completed_at = timezone.now()
+        self.save()
+    
+
+    def update_progress(self, progress_value: float, session_data: dict = None):
+        """
+        Updates progress for measurable lessons (e.g., videos).
+        If progress reaches 100%, mark lesson as completed.
+        """
+        self.progress_value = min(max(progress_value, 0), 100)  # Ensure 0-100%  
+        if session_data:
+            self.session_data = session_data
+
+        if self.progress_value >= 100:
+            self.mark_completed()
+        else:
+            self.save()
 
 class Review(TimeStampedModel,UserStampedModel):
     STATUS_CHOICES = [
@@ -173,12 +202,31 @@ class Assessment(UserStampedModel,TimeStampedModel):
         description = models.TextField(blank=True)
         pass_mark = models.PositiveIntegerField(default=50)  # %
         is_published = models.BooleanField(default=False)
-    
-
-        
 
         def __str__(self):
             return f"{self.course.title} - {self.title}"
+        
+
+class AssessmentAttempt(TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE
+    )
+    assessment = models.ForeignKey(
+        Assessment,
+        related_name="attempts",
+        on_delete=models.CASCADE
+    )
+    score = models.FloatField(default=0)
+    passed = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+       
+
+    class Meta:
+        unique_together = ("user", "assessment")
+
+    def __str__(self):
+        return f"{self.user} - {self.assessment}"
         
 class Question(UserStampedModel,TimeStampedModel):
     QUESTION_TYPE_CHOICES = [
@@ -216,27 +264,6 @@ class Choice(UserStampedModel,TimeStampedModel):
     def __str__(self):
         return self.text
     
-class AssessmentAttempt(TimeStampedModel):
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE
-    )
-    assessment = models.ForeignKey(
-        Assessment,
-        related_name="attempts",
-        on_delete=models.CASCADE
-    )
-    score = models.FloatField(default=0)
-    passed = models.BooleanField(default=False)
-    completed_at = models.DateTimeField(null=True, blank=True)
-       
-
-    class Meta:
-        unique_together = ("user", "assessment")
-
-    def __str__(self):
-        return f"{self.user} - {self.assessment}"
-    
 class Answer(TimeStampedModel):
     attempt = models.ForeignKey(
         AssessmentAttempt,
@@ -247,6 +274,9 @@ class Answer(TimeStampedModel):
         Question,
         on_delete=models.CASCADE
     )
+
+
+    
     selected_choice = models.ForeignKey(
         Choice,
         on_delete=models.CASCADE

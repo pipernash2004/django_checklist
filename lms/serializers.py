@@ -289,26 +289,64 @@ class EnrollmentSerializer(serializers.ModelSerializer):
 
 
 class LessonProgressSerializer(serializers.ModelSerializer):
+    mark_complete = serializers.BooleanField(
+    write_only=True,
+    required=False,
+    help_text="User intent to manually complete non-video lessons")
+
     class Meta:
         model = LessonProgress
-        fields = "__all__"
-        read_only_fields = ["completed_at"]
+        fields = [
+            "id",
+            "progress_value",
+            'mark_complete',
+            "session_data",
+        "is_completed",
+        "completed_at",
+
+        ]
+        read_only_fields = ["completed_at", "is_completed"]
+
 
     def validate(self, attrs):
         user = self.context["request"].user
+        
+        # checking if the user is enrolled in the course in the first place
         if not Enrollment.objects.filter(
             user=user, course=attrs["lesson"].course
         ).exists():
             raise serializers.ValidationError(
                 "User is not enrolled in this course."
             )
+        lesson = self.context["lesson"]
+        if lesson is None:
+            raise serializers.ValidationError("Lesson context is required.")
+        
+        lesson_type  = lesson.content_type
+
+        progress_value = attrs.get("progress_value", 0.0)
+        mark_complete = attrs.get("mark_complete", False)
+
+        if lesson_type == "video":
+            # must be between 0 and 100
+            if not (0.0 <= progress_value <= 100.0):
+                raise serializers.ValidationError(
+                    "For video lessons, progress_value must be between 0 and 100."
+                )
+            if mark_complete:
+                raise serializers.ValidationError(
+                    {"mark_complete": "Manual completion is not allowed for video lessons."}
+                )
+
+        else:
+            if progress_value is not None:
+                raise serializers.ValidationError(
+                    {"progress_value": "progress_value is not applicable for this lesson type."}
+                )
+            
         return attrs
 
-    def update(self, instance, validated_data):
-        if validated_data.get("is_completed") and not instance.completed_at:
-            instance.completed_at = timezone.now()
-        return super().update(instance, validated_data)
-
+    
 
 # ============================================================
 # ASSESSMENT ATTEMPTS & ANSWERS
@@ -407,3 +445,4 @@ class DashboardSerializer(serializers.Serializer):
     stats = StatsSerializer()
     enrollment_trends = EnrollmentTrendSerializer()
     recent_activities = ActivityLogSerializer(many=True)
+

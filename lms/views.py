@@ -28,7 +28,8 @@ from .serializers import (
     LessonNestedSerializer,
     CourseCreateUpdateSerializer,
     EnrollmentSerializer,
-    DashboardSerializer
+    DashboardSerializer,
+  
 
 )
 from drf_spectacular.utils import extend_schema
@@ -39,68 +40,6 @@ from datetime import timedelta
 logger = logging.getLogger(__name__)
 
 
-class DashboardViewSet(viewsets.ViewSet):
-    
-    serializer_class = DashboardSerializer
-
-    @extend_schema(responses={200: DashboardSerializer})
-    @action(detail=False, methods=["get"], url_path="overview", permission_classes=[IsAuthenticated])
-    def stats(self, request):
-        try:
-            total_courses = Course.objects.count()
-            total_students = Enrollment.objects.values("user").distinct().count()
-            pending_reviews = Review.objects.filter(status="pending").count()
-            active_assessments = Assessment.objects.filter(is_published=True).count()
-
-            # ---- Enrollment Trends ----
-            today = timezone.now().date()
-            start_date = today - timedelta(days=6)
-
-            enrollments = (
-                Enrollment.objects
-                .filter(created_at__date__gte=start_date)
-                .values("created_at__date")
-                .annotate(count=Count("id"))
-            )
-
-            trend_data = []
-            for i in range(7):
-                day = start_date + timedelta(days=i)
-                count = next(
-                    (e["count"] for e in enrollments if e["created_at__date"] == day),
-                    0
-                )
-                trend_data.append({
-                    "date": day,
-                    "label": day.strftime("%b %d"),
-                    "count": count,
-                })
-
-            dashboard_data = {
-                "stats": {
-                    "total_courses": total_courses,
-                    "total_students": total_students,
-                    "pending_reviews": pending_reviews,
-                    "active_assessments": active_assessments,
-                },
-                "enrollment_trends": {
-                    "range": "last_7_days",
-                    "growth_percentage": 0.0,
-                    "data": trend_data,
-                },
-                "recent_activities": ActivityLog.objects.order_by("-created_at")[:10]
-
-            }
-
-            serializer = DashboardSerializer(dashboard_data)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-
-        except Exception as e:
-            logger.error(f"Dashboard error: {str(e)}", exc_info=True)
-            return Response(
-                {"detail": "Failed to fetch dashboard data"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
 
 class CourseViewSet(viewsets.ModelViewSet):
     queryset = Course.objects.all().select_related('instructor', 'created_by', 'updated_by')
@@ -150,6 +89,72 @@ class CourseViewSet(viewsets.ModelViewSet):
             else:
                 sanitized[key] = sanitize_value(sanitized[key])
         return sanitized
+    
+
+    extend_schema(
+       
+        responses={201: OpenApiResponse(response=DashboardSerializer)}
+    )
+
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated], url_path='overview')
+    def stats(self, request):
+        try:
+            total_courses = Course.objects.count()
+            total_students = Enrollment.objects.values("user").distinct().count()
+            pending_reviews = Review.objects.filter(status="pending").count()
+            active_assessments = Assessment.objects.filter(is_published=True).count()
+
+            # ---- Enrollment Trends ----
+            #  getting the start date of the week 
+            today = timezone.now().date()
+            start_date = today - timedelta(days=6)
+
+            enrollments = (
+                Enrollment.objects
+                .filter(created_at__date__gte=start_date)
+                .values("created_at__date")
+                .annotate(count=Count("id"))
+            )
+
+            trend_data = []
+            for i in range(7):
+                day = start_date + timedelta(days=i)
+                count = next(
+                    (e["count"] for e in enrollments if e["created_at__date"] == day),
+                    0
+                )
+                trend_data.append({
+                    "date": day,
+                    "label": day.strftime("%b %d"),
+                    "count": count,
+                })
+
+            dashboard_data = {
+                "stats": {
+                    "total_courses": total_courses,
+                    "total_students": total_students,
+                    "pending_reviews": pending_reviews,
+                    "active_assessments": active_assessments,
+                },
+                "enrollment_trends": {
+                    "range": "last_7_days",
+                    "growth_percentage": 0.0,
+                    "data": trend_data,
+                },
+                "recent_activities": ActivityLog.objects.order_by("-created_at")[:10]
+
+            }
+
+            
+            serializer = DashboardSerializer(dashboard_data)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Dashboard error: {str(e)}", exc_info=True)
+            return Response(
+                {"detail": "Failed to fetch dashboard data"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     # ---------------------------
     # LIST
