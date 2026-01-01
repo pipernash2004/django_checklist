@@ -310,7 +310,7 @@ class LessonProgressSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         user = self.context["request"].user
-        
+
         # checking if the user is enrolled in the course in the first place
         if not Enrollment.objects.filter(
             user=user, course=attrs["lesson"].course
@@ -331,7 +331,7 @@ class LessonProgressSerializer(serializers.ModelSerializer):
             # must be between 0 and 100
             if not (0.0 <= progress_value <= 100.0):
                 raise serializers.ValidationError(
-                    "For video lessons, progress_value must be between 0 and 100."
+                    "For video lessons, progress_value must    be between 0 and 100."
                 )
             if mark_complete:
                 raise serializers.ValidationError(
