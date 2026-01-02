@@ -29,13 +29,13 @@ from .serializers import (
     CourseCreateUpdateSerializer,
     EnrollmentSerializer,
     DashboardSerializer,
-  
-
+    LessonProgressSerializer,
 )
 from drf_spectacular.utils import extend_schema
 from logs.models import SystemLog
 from django.utils import timezone
 from datetime import timedelta
+from rest_framework.viewsets import GenericViewSet
 # Logger setup
 logger = logging.getLogger(__name__)
 
@@ -1076,3 +1076,137 @@ class ReviewViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
     
+
+# This view handles learning progress updates for a single lesson.
+# It interprets progress events and applies lesson-type-specific rules.
+
+class LessonProgressViewSet(GenericViewSet):
+    """
+    Handles learning progress updates for a single lesson.
+
+    - GET  → fetch current progress
+    - POST → update progress (video OR document/article)
+    """
+
+    serializer_class = LessonProgressSerializer
+    permission_classes = [IsAuthenticated]
+    @extend_schema(
+        responses={200: OpenApiResponse(response=LessonProgressSerializer)}
+    )
+    @action(detail=True, methods=['post'], url_path='progress_post', permission_classes=[IsAuthenticated])
+    def progress_post(self, request, pk = None):
+       
+        lesson = Lesson.objects.filter(id=pk).first()
+        if lesson is None:
+            return Response(
+                {"detail": "Lesson not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if not Enrollment.objects.filter(
+            user=request.user,
+            course=lesson.course
+        ).exists():
+            return Response(
+                {"detail": "User not enrolled in the course."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        lesson_progress, _ = LessonProgress.objects.get_or_create(
+            user=request.user,
+            lesson=lesson,
+            defaults={
+                "progress_value": 0.0,
+                "is_completed": False
+            }
+        )
+
+        
+        if lesson_progress.is_completed:
+            return Response(
+                self.get_serializer(lesson_progress).data,
+                status=status.HTTP_200_OK
+            )
+
+        serializer = self.get_serializer(
+            lesson_progress,
+            data=request.data,
+            partial=True,
+            context={
+                "request": request,
+                "lesson": lesson
+            }
+        )
+        serializer.is_valid(raise_exception=True)
+
+        progress_value = serializer.validated_data.get("progress_value")
+        session_data = serializer.validated_data.get("session_data")
+        mark_complete = serializer.validated_data.get("mark_complete", False)
+        is_completed = serializer.validated_data.get("is_completed", False)
+
+        
+        lesson_type = lesson.course.content_type
+
+        if lesson_type == "video":
+    
+            lesson_progress.update_progress(
+                progress_value=progress_value,
+                session_data=session_data
+            )
+        elif is_completed == True:
+
+            ActivityLog.objects.create(
+                    user=request.user,
+                    action="completed_lesson",
+                    target_type="Lesson",
+                    target_id=lesson.pk,
+                    target_name=lesson.title[:50],
+                )
+
+        else:
+            # Documents / articles rely on explicit user intent
+            if mark_complete:
+                lesson_progress.mark_completed()
+
+        return Response(
+            self.get_serializer(lesson_progress).data,
+            status=status.HTTP_200_OK
+        )
+    @action(detail=True, methods=['get'], url_path='progress_get', permission_classes=[IsAuthenticated])
+    def progress_get(self, request, pk = None):
+        """
+        Fetch current progress for a lesson.
+        """
+
+        lesson = Lesson.objects.filter(id=pk).first()
+        if lesson is None:
+            return Response(
+                {"detail": "Lesson not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if not Enrollment.objects.filter(
+            user=request.user,
+            course=lesson.course
+        ).exists():
+            return Response(
+                {"detail": "User not enrolled in the course."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        lesson_progress, _ = LessonProgress.objects.get_or_create(
+            user=request.user,
+            lesson=lesson,
+            defaults={
+                "progress_value": 0.0,
+                "is_completed": False
+            }
+        )
+
+        return Response(
+            self.get_serializer(lesson_progress).data,
+            status=status.HTTP_200_OK
+        )
+
+
+        

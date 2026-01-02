@@ -8,6 +8,7 @@ from .views import (
     ChoiceViewSet,
     EnrollmentViewSet,
     ReviewViewSet,    
+    LessonProgressViewSet,
 )
 
 # Create a DRF router
@@ -21,6 +22,7 @@ router.register(r'questions', QuestionViewSet, basename='question')
 router.register(r'choices', ChoiceViewSet, basename='choice')
 router.register(r'enrollments', EnrollmentViewSet, basename='enrollment')
 router.register(r'reviews', ReviewViewSet, basename='review')
+router.register(r'lessonprogress',  LessonProgressViewSet, basename='lesson-progress')
 
 
 

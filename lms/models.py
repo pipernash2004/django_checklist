@@ -135,7 +135,7 @@ class LessonProgress(TimeStampedModel):
     Tracks the progress of a user in a specific lesson. 
     Designed to handle different lesson types: video links, articles, pdfs
     """
-    user = models.ForeignKey(Enrollment.course.user, on_delete=models.CASCADE, related_name="lesson_progress")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="lesson_progress")
     lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE)
     is_completed = models.BooleanField(default=False)
     completed_at = models.DateTimeField(null=True, blank=True)
@@ -150,9 +150,19 @@ class LessonProgress(TimeStampedModel):
     
 
     def mark_completed(self):
-        self.is_completed = True
-        self.completed_at = timezone.now()
-        self.save()
+        if not self.is_completed:
+            self.is_completed = True
+            self.completed_at = timezone.now()
+            self.save()
+
+            ActivityLog.objects.create(
+                user=self.user,
+                action="completed",
+                target_type="Lesson",
+                target_id=self.lesson.pk,
+                target_name=self.lesson.title[:50],
+            )
+
     
 
     def update_progress(self, progress_value: float, session_data: dict = None):
@@ -164,7 +174,7 @@ class LessonProgress(TimeStampedModel):
         if session_data:
             self.session_data = session_data
 
-        if self.progress_value >= 100:
+        if self.progress_value >= 70:
             self.mark_completed()
         else:
             self.save()
