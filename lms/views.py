@@ -1081,12 +1081,7 @@ class ReviewViewSet(viewsets.ModelViewSet):
 # It interprets progress events and applies lesson-type-specific rules.
 
 class LessonProgressViewSet(GenericViewSet):
-    """
-    Handles learning progress updates for a single lesson.
-
-    - GET  → fetch current progress
-    - POST → update progress (video OR document/article)
-    """
+  
 
     serializer_class = LessonProgressSerializer
     permission_classes = [IsAuthenticated]
@@ -1138,35 +1133,28 @@ class LessonProgressViewSet(GenericViewSet):
             }
         )
         serializer.is_valid(raise_exception=True)
-
-        progress_value = serializer.validated_data.get("progress_value")
-        session_data = serializer.validated_data.get("session_data")
         mark_complete = serializer.validated_data.get("mark_complete", False)
-        is_completed = serializer.validated_data.get("is_completed", False)
+    
 
+        #  geting the current_time and duration from session_data for video lessons
         
         lesson_type = lesson.course.content_type
-
         if lesson_type == "video":
+            session_data = serializer.validated_data.get("session_data") or {}
+            current_time = session_data.get("current_time")
+            duration = session_data.get("duration")
     
             lesson_progress.update_progress(
-                progress_value=progress_value,
-                session_data=session_data
+                current_time=current_time,
+                duration=duration
             )
-        elif is_completed == True:
-
-            ActivityLog.objects.create(
-                    user=request.user,
-                    action="completed_lesson",
-                    target_type="Lesson",
-                    target_id=lesson.pk,
-                    target_name=lesson.title[:50],
-                )
-
+        
         else:
             # Documents / articles rely on explicit user intent
             if mark_complete:
-                lesson_progress.mark_completed()
+                #  since user marked complete by next to the next pdf or article, set progress to 100%
+                lesson_progress.document__update_progress()
+                
 
         return Response(
             self.get_serializer(lesson_progress).data,

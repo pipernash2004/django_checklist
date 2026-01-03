@@ -294,22 +294,22 @@ class LessonProgressSerializer(serializers.ModelSerializer):
     required=False,
     help_text="User intent to manually complete non-video lessons")
     session_data = serializers.JSONField(
-        required=False,
+        required = False,
         help_text="Additional session data related to progress"
     )
 
     class Meta:
         model = LessonProgress
         fields = [
-            "id",
-            "progress_value",
-            'mark_complete',
-            "session_data",
+        "id",
+        "progress_value", # read only 
+        'mark_complete',
+        "session_data",
         "is_completed",
         "completed_at",
 
         ]
-        read_only_fields = ["completed_at", "is_completed"]
+        read_only_fields = ["completed_at", "is_completed", "progress_value"]
 
 
     def validate(self, attrs):
@@ -331,22 +331,34 @@ class LessonProgressSerializer(serializers.ModelSerializer):
 
         lesson_type = lesson.course.content_type
 
-        progress_value = attrs.get("progress_value")
+        
+
         mark_complete = attrs.get("mark_complete", False)
+        session_data = attrs.get("session_data", {})
 
         if lesson_type == "video":
-            if progress_value is None or not (0.0 <= progress_value <= 100.0):
+            if session_data:
                 raise serializers.ValidationError(
-                    {"progress_value": "For video lessons, progress_value must be between 0 and 100."}
+                    {"session_data": "Video lessons require session_data."}
                 )
+            
+            if "current_time" not in session_data and "duration" not in session_data:
+                raise serializers.ValidationError(
+                    {"session_data": "current_time and duration are required."}
+                )
+            
             if mark_complete:
                 raise serializers.ValidationError(
                     {"mark_complete": "Manual completion is not allowed for video lessons."}
                 )
         else:
-            if progress_value is not None:
+            if session_data:
                 raise serializers.ValidationError(
-                    {"progress_value": "progress_value is not applicable for this lesson type."}
+                    {"session_data": "Non-video lessons do not use session_data."}
+                )
+            if not mark_complete:
+                raise serializers.ValidationError(
+                    {"mark_complete": "Non-video lessons must be manually completed."}
                 )
 
         return attrs

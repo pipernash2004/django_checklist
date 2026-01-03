@@ -157,29 +157,41 @@ class LessonProgress(TimeStampedModel):
 
             ActivityLog.objects.create(
                 user=self.user,
-                action="completed",
+                action="completed_lesson",
                 target_type="Lesson",
                 target_id=self.lesson.pk,
                 target_name=self.lesson.title[:50],
             )
 
     
+    def video_update_progress(self, *, current_time , duration):
+    #     not allowing cheating and also not penalizing re-watching or getting the progress fall back when the
+    #  user rewind the video
+        max_time  = max (
+            self.session_data.get("max_time_reached", 0), current_time
+        )
 
-    def update_progress(self, progress_value: float, session_data: dict = None):
-        """
-        Updates progress for measurable lessons (e.g., videos).
-        If progress reaches 100%, mark lesson as completed.
-        """
-        self.progress_value = min(max(progress_value, 0), 100)  # Ensure 0-100%  
-        if session_data:
-            self.session_data = session_data
+        self.session_data.update({
+            "duration": duration,
+            "current_time": current_time,
+            "max_time_reached": max_time,
+            "last_update_at": timezone.now().isoformat(),
+        })
+
+        progress = (max_time / duration) * 100
+        self.progress_value = min(progress, 100)
 
         if self.progress_value >= 70:
             self.mark_completed()
-        else:
-            self.save()
+    
+    def document__update_progress(self):
+        self.progress_value = 100.0
+        self.mark_completed()
+
+    
 
 class Review(TimeStampedModel,UserStampedModel):
+    
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('approved', 'Approved'),
