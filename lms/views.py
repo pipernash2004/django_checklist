@@ -1144,7 +1144,7 @@ class LessonProgressViewSet(GenericViewSet):
             current_time = session_data.get("current_time")
             duration = session_data.get("duration")
     
-            lesson_progress.update_progress(
+            lesson_progress.video_update_progress(
                 current_time=current_time,
                 duration=duration
             )

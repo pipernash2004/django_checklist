@@ -276,7 +276,7 @@ class LessonProgressAdmin(admin.ModelAdmin):
     - Track completion timestamps
     """
     
-    list_display = ['user', 'lesson_title', 'course_title', 'completion_status', 'completed_at']
+    list_display = ['user', 'lesson_title', 'course_title', 'progress_value','completion_status', 'completed_at']
     list_filter = ['is_completed', 'created_at', 'completed_at']
     search_fields = ['user__username', 'lesson__title', 'lesson__course__title']
     readonly_fields = ['created_at', 'updated_at']

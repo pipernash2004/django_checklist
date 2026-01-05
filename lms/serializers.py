@@ -337,7 +337,7 @@ class LessonProgressSerializer(serializers.ModelSerializer):
         session_data = attrs.get("session_data", {})
 
         if lesson_type == "video":
-            if session_data:
+            if session_data is None:
                 raise serializers.ValidationError(
                     {"session_data": "Video lessons require session_data."}
                 )

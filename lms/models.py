@@ -53,7 +53,7 @@ class Course(UserStampedModel,TimeStampedModel):
       
     ]
     CONTENT_TYPES = [
-        ('course', 'Course'),
+       
         ('video', 'Video'),
         ('audio', 'Audio'),
         ('article', 'Article'),
@@ -180,6 +180,7 @@ class LessonProgress(TimeStampedModel):
 
         progress = (max_time / duration) * 100
         self.progress_value = min(progress, 100)
+        self.save()
 
         if self.progress_value >= 70:
             self.mark_completed()
